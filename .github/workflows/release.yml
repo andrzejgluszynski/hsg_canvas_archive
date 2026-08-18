@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: macos-arm64
+            asset: canvas-archive-macos-arm64
+          # macos-13 was retired 2025-12-04. macos-15-intel is the last free x86_64
+          # macOS image and disappears in August 2027.
+          - os: macos-15-intel
+            label: macos-x86_64
+            asset: canvas-archive-macos-x86_64
+          # Pin to the OLDEST supported Ubuntu: PyInstaller links the build machine's
+          # glibc, so building on 24.04 breaks users on 22.04 and Debian 12.
+          - os: ubuntu-22.04
+            label: linux-x86_64
+            asset: canvas-archive-linux-x86_64
+          - os: windows-latest
+            label: windows-x64
+            asset: canvas-archive-windows-x64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --group build
+
+      - name: Build onefile
+        run: uv run pyinstaller packaging/canvas-archive.spec --noconfirm
+
+      - name: Build onedir (antivirus fallback)
+        run: uv run pyinstaller packaging/canvas-archive.spec --noconfirm --distpath dist-onedir -- --onedir
+
+      # Missing hidden imports are the most common PyInstaller failure and are
+      # invisible until runtime. Better CI catches it than someone's classmate.
+      - name: Smoke test the built binary
+        shell: bash
+        run: |
+          set -eux
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            BIN="dist/canvas-archive.exe"
+          else
+            BIN="dist/canvas-archive"
+            chmod +x "$BIN"
+          fi
+          "$BIN" --version
+          "$BIN" --help | grep -q "Archive everything from your Canvas"
+          # The bundled institutions.toml must load, or the default URL vanishes.
+          "$BIN" --help | grep -q "exec-learning.unisg.ch"
+          # A run with no token must fail cleanly, not hang or traceback.
+          if "$BIN" --no-wizard --creds-file /nonexistent -o /tmp/none < /dev/null; then
+            echo "expected a non-zero exit without a token"; exit 1
+          fi
+
+      - name: Verify macOS signature
+        if: runner.os == 'macOS'
+        run: codesign -dv --verbose=2 dist/canvas-archive 2>&1 || true
+
+      - name: Package artifacts
+        shell: bash
+        run: |
+          set -eux
+          mkdir -p out
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp dist/canvas-archive.exe "out/${{ matrix.asset }}"
+            7z a "out/canvas-archive-${{ matrix.label }}-folder.zip" ./dist-onedir/canvas-archive/*
+          else
+            cp dist/canvas-archive "out/${{ matrix.asset }}"
+            chmod +x "out/${{ matrix.asset }}"
+            (cd dist-onedir && zip -qr "../out/canvas-archive-${{ matrix.label }}-folder.zip" canvas-archive)
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: out/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect and checksum
+        run: |
+          set -eux
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          cp install.sh release/
+          cd release
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            **macOS / Linux** — this avoids the Gatekeeper warning entirely, because
+            files fetched with `curl` are not quarantined:
+
+            ```sh
+            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install.sh | sh
+            ```
+
+            **Windows** — download `canvas-archive-windows-x64.exe` below and run it.
+            SmartScreen will warn that the publisher is unknown: click **More info →
+            Run anyway**. The binary is unsigned; verify it against `SHA256SUMS` if you
+            would rather check than trust.
+
+            If your antivirus objects to the single-file build, use the
+            `-folder.zip` version instead — same program, unpacked.

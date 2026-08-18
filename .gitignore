@@ -1,0 +1,35 @@
+# --- secrets: never commit ---
+creds.txt
+credentials.yaml
+cookies.txt
+*.token
+.env
+.env.*
+
+# --- archive output ---
+output/
+CanvasArchive/
+archive.toml
+manifest.sqlite3
+*.part
+
+# --- vendored reference clone (moved out of tree; guard anyway) ---
+canvas-student-data-export/
+
+# --- Python ---
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- macOS ---
+.DS_Store
+**/.DS_Store

@@ -1,0 +1,7 @@
+Canvas Archive
+
+Inspired by davekats/canvas-student-data-export (MIT License,
+Copyright (c) 2025 David Katsandres), which served as a reference for
+which Canvas LMS API endpoints are worth calling.
+
+This is an independent implementation; no source code was copied.

@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check src/ tests/
+      - run: uv run ruff format --check src/ tests/
+        continue-on-error: true
+      - run: uv run pytest -q
+        env:
+          PYTHON_VERSION: ${{ matrix.python }}
+
+  build-check:
+    # Guard the packaging path on any PR that touches it, so a broken spec is caught
+    # before a tag is cut rather than during a release.
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-22.04, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen --group build
+      - run: uv run pyinstaller packaging/canvas-archive.spec --noconfirm
+      - shell: bash
+        run: |
+          BIN=dist/canvas-archive; [ "${{ runner.os }}" = "Windows" ] && BIN=dist/canvas-archive.exe
+          chmod +x "$BIN" 2>/dev/null || true
+          "$BIN" --version
