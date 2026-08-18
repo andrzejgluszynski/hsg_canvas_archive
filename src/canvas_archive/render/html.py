@@ -19,58 +19,187 @@ from urllib.parse import quote
 from ..paths import fs_path
 
 CSS = """
+/* A deliberately small design system. No webfonts and no icon library: the archive
+   must render identically from a USB stick in ten years, so everything is either a
+   system font or an inline SVG. */
 :root {
-  --bg: #fdfdfc; --fg: #24211d; --muted: #6b655c; --rule: #e3ded6;
-  --accent: #7a4b2a; --card: #ffffff; --code: #f4f1ec;
+  --bg:#fbfaf8; --surface:#fff; --fg:#1c1a17; --muted:#6f6a62;
+  --rule:#e6e1d8; --accent:#8a5a30; --accent-soft:#f2ebe2; --shadow:0 1px 2px rgba(28,26,23,.05);
+  --radius:10px;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",Roboto,
+         "Helvetica Neue",Arial,sans-serif;
+  --serif:ui-serif,Georgia,Cambria,"Times New Roman",serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1a1815; --fg: #e8e3da; --muted: #9a9287; --rule: #332f2a;
-    --accent: #d9a273; --card: #211e1a; --code: #262320;
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#16150f; --surface:#1e1c18; --fg:#eae5dc; --muted:#9a938a;
+    --rule:#2f2c26; --accent:#d9a273; --accent-soft:#2a231c; --shadow:none;
   }
 }
-* { box-sizing: border-box; }
-body {
-  margin: 0; background: var(--bg); color: var(--fg);
-  font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-        Helvetica, Arial, sans-serif;
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--fg);
+  font-family:var(--sans);font-size:16.5px;line-height:1.7;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
 }
-.wrap { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
-nav.crumbs { font-size: .85rem; color: var(--muted); margin-bottom: 2rem; }
-nav.crumbs a { color: var(--muted); }
-h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 1rem; letter-spacing: -.02em; }
-h2 { font-size: 1.3rem; margin: 2.5rem 0 .75rem; padding-top: 1.25rem;
-     border-top: 1px solid var(--rule); }
-h3 { font-size: 1.05rem; margin: 1.75rem 0 .5rem; }
-h4, h5, h6 { font-size: .95rem; margin: 1.25rem 0 .5rem; }
-p, li { overflow-wrap: anywhere; }
-a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
-em { color: var(--muted); }
-code { background: var(--code); padding: .12em .35em; border-radius: 3px; font-size: .9em; }
-pre { background: var(--code); padding: 1rem; border-radius: 6px; overflow-x: auto; }
-blockquote {
-  margin: .75rem 0; padding: .1rem 0 .1rem 1rem;
-  border-left: 3px solid var(--rule); color: var(--fg);
+.wrap{max-width:46rem;margin:0 auto;padding:2.75rem 1.5rem 6rem}
+
+/* --- masthead ---------------------------------------------------------- */
+nav.crumbs{
+  display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;
+  font-size:.82rem;color:var(--muted);margin-bottom:2.25rem;
 }
-blockquote blockquote { border-left-color: var(--accent); }
-.tablewrap { overflow-x: auto; margin: 1rem 0; }
-table { border-collapse: collapse; width: 100%; font-size: .93rem; }
-th, td { text-align: left; padding: .5rem .7rem; border-bottom: 1px solid var(--rule); }
-th { font-weight: 600; color: var(--muted); font-size: .8rem; text-transform: uppercase;
-     letter-spacing: .04em; }
-tr:last-child td { border-bottom: none; }
-hr { border: 0; border-top: 1px solid var(--rule); margin: 2rem 0; }
-.cards { display: grid; gap: .6rem; margin: 1.5rem 0; }
-.card {
-  display: block; padding: .9rem 1.1rem; background: var(--card);
-  border: 1px solid var(--rule); border-radius: 8px; text-decoration: none; color: var(--fg);
+nav.crumbs a{color:var(--muted);text-decoration:none;border-bottom:1px solid transparent}
+nav.crumbs a:hover{color:var(--accent);border-bottom-color:var(--accent)}
+nav.crumbs .sep{opacity:.45}
+
+/* --- type -------------------------------------------------------------- */
+h1{
+  font-family:var(--serif);font-size:2.05rem;line-height:1.2;font-weight:600;
+  letter-spacing:-.015em;margin:0 0 .6rem;
 }
-.card:hover { border-color: var(--accent); }
-.card .t { font-weight: 600; }
-.card .s { font-size: .85rem; color: var(--muted); margin-top: .15rem; }
-footer { margin-top: 4rem; padding-top: 1.25rem; border-top: 1px solid var(--rule);
-         font-size: .8rem; color: var(--muted); }
+h2{
+  font-size:1.22rem;font-weight:650;letter-spacing:-.005em;
+  margin:2.75rem 0 .9rem;padding-top:1.4rem;border-top:1px solid var(--rule);
+}
+h3{font-size:1.02rem;font-weight:650;margin:1.9rem 0 .5rem}
+h4,h5,h6{font-size:.93rem;font-weight:650;margin:1.4rem 0 .4rem;color:var(--muted)}
+p{margin:0 0 1.05rem}
+p,li{overflow-wrap:anywhere}
+ul,ol{padding-left:1.35rem;margin:0 0 1.05rem}
+li{margin:.28rem 0}
+li::marker{color:var(--muted)}
+a{color:var(--accent);text-decoration:none;
+  border-bottom:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}
+a:hover{border-bottom-color:var(--accent)}
+em{color:var(--muted);font-style:normal}
+strong{font-weight:650}
+code{font-family:var(--mono);background:var(--accent-soft);padding:.13em .38em;
+     border-radius:4px;font-size:.88em}
+pre{background:var(--accent-soft);padding:1rem 1.1rem;border-radius:var(--radius);
+    overflow-x:auto;line-height:1.55}
+pre code{background:none;padding:0}
+blockquote{
+  margin:1rem 0;padding:.15rem 0 .15rem 1.15rem;
+  border-left:2px solid var(--rule);color:var(--fg);
+}
+blockquote blockquote{border-left-color:var(--accent)}
+hr{border:0;border-top:1px solid var(--rule);margin:2.5rem 0}
+p.sub{color:var(--muted);font-size:.9rem;margin:-.25rem 0 1.75rem}
+
+/* --- tables ------------------------------------------------------------ */
+.tablewrap{overflow-x:auto;margin:1.25rem 0;
+           border:1px solid var(--rule);border-radius:var(--radius);background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.93rem}
+th,td{text-align:left;padding:.62rem .85rem;border-bottom:1px solid var(--rule)}
+th{font-weight:600;color:var(--muted);font-size:.72rem;text-transform:uppercase;
+   letter-spacing:.07em;background:var(--accent-soft)}
+tr:last-child td{border-bottom:none}
+
+/* --- file browser ------------------------------------------------------ */
+table.files td{padding:.58rem .85rem;vertical-align:middle}
+table.files td.k{width:2.4rem;padding-right:0;color:var(--muted)}
+table.files td.n{text-align:right;color:var(--muted);font-size:.85rem;
+                 white-space:nowrap;font-variant-numeric:tabular-nums}
+table.files a{border-bottom:none;color:var(--fg);font-weight:500}
+table.files tr:hover td{background:var(--accent-soft)}
+table.files tr:hover a{color:var(--accent)}
+
+/* --- section cards ----------------------------------------------------- */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(13.5rem,1fr));
+       gap:.7rem;margin:1.4rem 0}
+.card{
+  display:flex;align-items:center;gap:.7rem;padding:.85rem 1rem;
+  background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);
+  text-decoration:none;color:var(--fg);box-shadow:var(--shadow);
+  transition:border-color .15s ease,transform .15s ease;
+}
+.card:hover{border-color:var(--accent);transform:translateY(-1px)}
+.card .ico{color:var(--accent);flex:none}
+.card .t{font-weight:600;font-size:.95rem;line-height:1.3}
+.card .s{font-size:.8rem;color:var(--muted);margin-top:.05rem}
+
+/* --- icons ------------------------------------------------------------- */
+.ico{width:1.15em;height:1.15em;vertical-align:-.2em;flex:none}
+.ico-sm{width:1em;height:1em}
+
+footer{margin-top:4.5rem;padding-top:1.4rem;border-top:1px solid var(--rule);
+       font-size:.82rem;color:var(--muted)}
+footer a{color:var(--muted)}
+
+@media (max-width:34rem){
+  .wrap{padding:1.75rem 1.1rem 4rem}
+  h1{font-size:1.7rem}
+  .cards{grid-template-columns:1fr}
+}
 """
+
+# A tiny inline sprite. Stroke-based so a single set works on both themes, and small
+# enough that repeating it on every page costs less than a single webfont request
+# would -- which we could not make anyway.
+# Stroke-based icon paths, kept as data so no line runs away and a new icon is one
+# entry rather than a wall of markup. Drawn on a 24x24 grid, inheriting currentColor
+# so a single set works in both themes.
+_ICON_PATHS: dict[str, str] = {
+    "doc": (
+        '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10'
+        'a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>'
+    ),
+    "folder": (
+        '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'
+    ),
+    "video": '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 11 5-3v8l-5-3z"/>',
+    "audio": (
+        '<path d="M9 18V6l10-2v12"/>'
+        '<circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>'
+    ),
+    "image": (
+        '<rect x="3" y="4" width="18" height="16" rx="2"/>'
+        '<circle cx="8.5" cy="9.5" r="1.6"/><path d="m21 16-5-5L5 20"/>'
+    ),
+    "page": '<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+    "link": (
+        '<path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/>'
+        '<path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/>'
+    ),
+    "grade": '<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>',
+    "task": '<path d="M9 11l2 2 4-4"/><rect x="3" y="4" width="18" height="16" rx="2"/>',
+    "chat": '<path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/>',
+    "mega": (
+        '<path d="M3 11v2a1 1 0 0 0 1 1h3l7 4V6L7 10H4a1 1 0 0 0-1 1z"/>'
+        '<path d="M18 9a4 4 0 0 1 0 6"/>'
+    ),
+    "book": '<path d="M4 5a2 2 0 0 1 2-2h13v18H6a2 2 0 0 1-2-2z"/><path d="M8 3v18"/>',
+    "quiz": (
+        '<circle cx="12" cy="12" r="9"/>'
+        '<path d="M9.5 9.5a2.5 2.5 0 1 1 3 2.45V14"/><path d="M12 17.5v.01"/>'
+    ),
+    "home": '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/>',
+    "archive": (
+        '<rect x="3" y="4" width="18" height="4" rx="1"/>'
+        '<path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/>'
+    ),
+}
+
+_ICON_ATTRS = (
+    'fill="none" stroke="currentColor" stroke-width="1.7" '
+    'stroke-linecap="round" stroke-linejoin="round"'
+)
+
+ICON_SPRITE = (
+    '<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>'
+    + "".join(f'<g id="i-{k}" {_ICON_ATTRS}>{v}</g>' for k, v in _ICON_PATHS.items())
+    + "</defs></svg>"
+)
+
+
+def icon(name: str, extra: str = "") -> str:
+    """Reference a sprite symbol. Decorative, so hidden from assistive tech."""
+    cls = f"ico {extra}".strip()
+    return f'<svg class="{cls}" aria-hidden="true"><use href="#i-{name}"/></svg>'
+
 
 _INLINE = (
     (re.compile(r"\*\*(.+?)\*\*", re.S), r"<strong>\1</strong>"),
@@ -205,6 +334,11 @@ def markdown_to_html(text: str) -> str:
     return "\n".join(out)
 
 
+def _pretty(name: str) -> str:
+    """Folder name to something a person would write."""
+    return name.lstrip("_").replace("_", " ").replace("-", " ").strip().title()
+
+
 def course_label(folder: str) -> str:
     """`Corporate Finance II__PT_COFIN2_26__843` -> `Corporate Finance II`.
 
@@ -212,6 +346,119 @@ def course_label(folder: str) -> str:
     disk, but neither belongs in a breadcrumb a person reads.
     """
     return folder.split("__")[0].strip() or folder
+
+
+_EXT_ICON = {
+    ".pdf": "doc",
+    ".doc": "doc",
+    ".docx": "doc",
+    ".txt": "doc",
+    ".rtf": "doc",
+    ".ppt": "page",
+    ".pptx": "page",
+    ".key": "page",
+    ".xls": "grade",
+    ".xlsx": "grade",
+    ".csv": "grade",
+    ".numbers": "grade",
+    ".mp4": "video",
+    ".mov": "video",
+    ".m4v": "video",
+    ".avi": "video",
+    ".mkv": "video",
+    ".mp3": "audio",
+    ".m4a": "audio",
+    ".wav": "audio",
+    ".aac": "audio",
+    ".png": "image",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".gif": "image",
+    ".svg": "image",
+    ".webp": "image",
+    ".heic": "image",
+    ".jfif": "image",
+    ".html": "page",
+    ".htm": "page",
+    ".md": "page",
+    ".json": "doc",
+    ".zip": "folder",
+}
+
+# Which icon fronts each section card.
+_SECTION_ICON = {
+    "files": "folder",
+    "submissions": "task",
+    "grades": "grade",
+    "assignments": "task",
+    "announcements": "mega",
+    "discussions": "chat",
+    "modules": "book",
+    "pages": "page",
+    "quizzes": "quiz",
+    "_media": "image",
+}
+
+
+def _size(num: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if abs(num) < 1024:
+            return f"{num:.0f} {unit}" if unit == "B" else f"{num:.1f} {unit}"
+        num /= 1024
+    return f"{num:.1f} TB"
+
+
+def _kind(path: Path) -> str:
+    if path.is_dir():
+        return "folder"
+    return _EXT_ICON.get(path.suffix.lower(), "doc")
+
+
+def file_listing(directory: Path, *, title: str, depth: int, crumbs: str = "") -> str:
+    """A browsable listing for a folder of real files.
+
+    Browsers will not reliably render a directory index for a `file://` URL -- Chrome
+    refuses outright -- so a folder of PDFs is otherwise a dead link. This generates
+    the index instead of relying on the browser to.
+    """
+    entries = sorted(
+        (e for e in directory.iterdir() if not e.name.startswith(".")),
+        key=lambda e: (not e.is_dir(), e.name.lower()),
+    )
+    rows = []
+    total = 0
+    for entry in entries:
+        if entry.name == "index.html":
+            continue
+        if entry.is_dir():
+            target = f"{quote(entry.name)}/index.html"
+            size = ""
+            count = sum(1 for _ in entry.rglob("*") if _.is_file())
+            note = f"{count} item{'s' if count != 1 else ''}"
+        else:
+            target = quote(entry.name)
+            total += entry.stat().st_size
+            size = _size(entry.stat().st_size)
+            note = ""
+        rows.append(
+            f'<tr><td class="k">{icon(_kind(entry))}</td>'
+            f'<td><a href="./{target}">{html_mod.escape(entry.name)}</a></td>'
+            f'<td class="n">{size or note}</td></tr>'
+        )
+
+    if not rows:
+        body = "<p><em>This folder is empty.</em></p>"
+    else:
+        body = (
+            f"<h1>{html_mod.escape(title)}</h1>"
+            f"<p class='sub'>{len(rows)} item{'s' if len(rows) != 1 else ''}"
+            + (f" · {_size(total)}" if total else "")
+            + "</p>"
+            "<div class='tablewrap'><table class='files'><tbody>"
+            + "".join(rows)
+            + "</tbody></table></div>"
+        )
+    return page(title, body, crumbs=crumbs, depth=depth)
 
 
 def page(title: str, body_html: str, *, crumbs: str = "", depth: int = 0) -> str:
@@ -227,10 +474,12 @@ def page(title: str, body_html: str, *, crumbs: str = "", depth: int = 0) -> str
 <style>{CSS}</style>
 </head>
 <body>
+{ICON_SPRITE}
 <div class="wrap">
 {nav}
 {body_html}
-<footer>Archived from Canvas · <a href="{home}index.html">All courses</a></footer>
+<footer>{icon("archive", "ico-sm")} Archived from Canvas ·
+<a href="{home}index.html">All courses</a></footer>
 </div>
 </body>
 </html>
@@ -256,13 +505,13 @@ def build_site(root: Path) -> int:
 
         crumbs = ""
         if depth:
-            crumbs = f'<a href="{"../" * depth}index.html">All courses</a>'
+            crumbs = f'<a href="{"../" * depth}index.html">{icon("home", "ico-sm")} All courses</a>'
             # Everything below courses/<course>/ also links back to its course index.
             # That index lives (depth - 2) levels up; at depth 2 the page *is* it.
             if rel.parts[0] == "courses" and depth > 2:
                 up = "../" * (depth - 2)
                 label = html_mod.escape(course_label(rel.parts[1]))
-                crumbs += f' &rsaquo; <a href="{up}index.html">{label}</a>'
+                crumbs += f'<span class="sep">&rsaquo;</span><a href="{up}index.html">{label}</a>'
 
         if depth == 0:
             title = "Canvas Archive"
@@ -276,6 +525,44 @@ def build_site(root: Path) -> int:
         )
         count += 1
 
+    # Folders of real files get a generated index, because a browser will not draw
+    # one for a file:// URL.
+    for course_dir in (root / "courses").glob("*"):
+        if not course_dir.is_dir():
+            continue
+        for folder in course_dir.rglob("*"):
+            if not folder.is_dir():
+                continue
+            if (folder / "index.html").exists():
+                continue  # already has a page generated from its README
+            # A folder holding only sub-folders (submissions/) still needs an index,
+            # otherwise the only way in is to already know the sub-folder names.
+            has_content = any(
+                (f.is_file() and f.suffix != ".md") or (f.is_dir() and any(f.iterdir()))
+                for f in folder.iterdir()
+            )
+            if not has_content:
+                continue
+            rel = folder.relative_to(root)
+            depth = len(rel.parts)
+            crumbs = (
+                f'<a href="{"../" * depth}index.html">'
+                f"{icon('home', 'ico-sm')} All courses</a>"
+                f'<span class="sep">&rsaquo;</span>'
+                f'<a href="{"../" * (depth - 2)}index.html">'
+                f"{html_mod.escape(course_label(course_dir.name))}</a>"
+            )
+            fs_path(folder / "index.html").write_text(
+                file_listing(
+                    folder,
+                    title=folder.name.replace("_", " ").title(),
+                    depth=depth,
+                    crumbs=crumbs,
+                ),
+                encoding="utf-8",
+            )
+            count += 1
+
     # A course index should also link to its section pages.
     for course_dir in (root / "courses").glob("*"):
         index = course_dir / "index.html"
@@ -285,20 +572,26 @@ def build_site(root: Path) -> int:
         for section in sorted(course_dir.iterdir()):
             if not section.is_dir():
                 continue
+            page_file = section / "index.html"
+            if page_file.exists():
+                items = [f for f in section.rglob("*") if f.is_file() and f.suffix != ".html"]
+                note = f"{len(items)} file{'s' if len(items) != 1 else ''}" if items else ""
+                cards.append(
+                    f'<a class="card" href="./{quote(section.name)}/index.html">'
+                    f"{icon(_SECTION_ICON.get(section.name, 'doc'))}"
+                    f'<div><div class="t">{html_mod.escape(_pretty(section.name))}</div>'
+                    + (f'<div class="s">{note}</div>' if note else "")
+                    + "</div></a>"
+                )
+                continue
             pages = sorted(section.glob("*.html"))
             if pages:
                 cards.append(
                     f'<a class="card" href="./{quote(section.name)}/{quote(pages[0].name)}">'
-                    f'<div class="t">{html_mod.escape(section.name.title())}</div></a>'
+                    f"{icon(_SECTION_ICON.get(section.name, 'doc'))}"
+                    f'<div><div class="t">{html_mod.escape(_pretty(section.name))}</div>'
+                    f"</div></a>"
                 )
-            elif section.name in ("files", "submissions"):
-                items = [p for p in section.iterdir() if p.is_file() and p.suffix != ".json"]
-                if items:
-                    cards.append(
-                        f'<a class="card" href="./{quote(section.name)}/">'
-                        f'<div class="t">{html_mod.escape(section.name.title())}</div>'
-                        f'<div class="s">{len(items)} files</div></a>'
-                    )
         if cards:
             text = fs_path(index).read_text(encoding="utf-8")
             block = '<h2>Sections</h2>\n<div class="cards">' + "".join(cards) + "</div>"

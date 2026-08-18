@@ -6,6 +6,8 @@ The fixture deliberately mirrors what a real restricted deployment returns: the
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -18,7 +20,14 @@ API = f"{BASE}/api/v1"
 PDF = b"%PDF-1.4" + b"z" * 4000
 
 
-def _mount(*, file_failures: int = 0, submissions=None) -> dict:
+def _mount(
+    *,
+    file_failures: int = 0,
+    submissions=None,
+    page_body=None,
+    syllabus=None,
+    assignments=None,
+) -> dict:
     state = {"file_attempts": 0}
 
     respx.get(f"{API}/users/self").mock(
@@ -37,7 +46,7 @@ def _mount(*, file_failures: int = 0, submissions=None) -> dict:
                     "id": 1,
                     "name": "Strategy 101",
                     "course_code": "STRAT",
-                    "syllabus_body": "<p>Read everything</p>",
+                    "syllabus_body": syllabus or "<p>Read everything</p>",
                 }
             ]
             if "enrollment_state=active" in str(request.url)
@@ -66,7 +75,10 @@ def _mount(*, file_failures: int = 0, submissions=None) -> dict:
         )
     )
     respx.get(f"{API}/courses/1/pages/intro").mock(
-        return_value=httpx.Response(200, json={"title": "Intro", "body": "<h1>Hello</h1>"})
+        return_value=httpx.Response(
+            200,
+            json={"title": "Intro", "body": page_body or "<h1>Hello</h1>"},
+        )
     )
     respx.get(f"{API}/courses/1/files/500").mock(
         return_value=httpx.Response(
@@ -80,7 +92,7 @@ def _mount(*, file_failures: int = 0, submissions=None) -> dict:
         )
     )
     respx.get(url__startswith=f"{API}/courses/1/assignments").mock(
-        return_value=httpx.Response(200, json=[])
+        return_value=httpx.Response(200, json=assignments or [])
     )
     respx.get(url__startswith=f"{API}/courses/1/discussion_topics").mock(
         return_value=httpx.Response(200, json=[])
@@ -362,4 +374,216 @@ async def test_html_viewer_can_be_switched_off(client, tmp_path):
     await Archiver(client, tmp_path, build_html=False).run()
     assert not (tmp_path / "index.html").exists()
     assert (tmp_path / "README.md").exists()
+    await client.aclose()
+
+
+# --- files referenced from course text ---------------------------------------
+
+
+@respx.mock
+async def test_syllabus_linked_pdf_is_downloaded_and_repointed(client, tmp_path):
+    """A syllabus is usually a *link* to a PDF, not inline text.
+
+    Module-first traversal never sees it, so without this the most important
+    document in the course is archived as a dead URL.
+    """
+    _mount(
+        syllabus=(
+            '<p>See <a href="https://canvas.test/courses/1/files/700'
+            '?location=course_syllabus_1&wrap=1">STRAT_Syllabus.pdf</a></p>'
+        )
+    )
+    respx.get(f"{API}/courses/1/files/700").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 700,
+                "display_name": "STRAT_Syllabus.pdf",
+                "size": 9,
+                "url": "https://files.test/700?verifier=zz",
+            },
+        )
+    )
+    respx.get(url__startswith="https://files.test/700").mock(
+        return_value=httpx.Response(200, content=b"SYLLABUS!")
+    )
+
+    stats = await Archiver(client, tmp_path, build_html=False).run()
+    course = next((tmp_path / "courses").iterdir())
+
+    assert (course / "files" / "STRAT_Syllabus.pdf").read_bytes() == b"SYLLABUS!"
+    assert stats.linked_files == 1
+
+    # The README must point at the local copy, not back at Canvas.
+    readme = (course / "README.md").read_text()
+    assert "canvas.test/courses/1/files/700" not in readme
+    assert "STRAT_Syllabus.pdf" in readme
+    assert "files/STRAT_Syllabus.pdf" in readme.replace("%20", " ")
+
+    # And it must appear in the file index, so the archive describes itself.
+    listed = json.loads((course / "files" / "files.json").read_text())
+    assert any(f.get("id") == 700 for f in listed)
+    await client.aclose()
+
+
+@respx.mock
+async def test_linked_and_embedded_files_go_to_different_places(client, tmp_path):
+    """Images are decoration and belong in _media; documents belong in files/."""
+    _mount(
+        page_body=(
+            '<p><img src="https://canvas.test/courses/1/files/801/preview">'
+            '<a href="https://canvas.test/courses/1/files/802">Handout.pdf</a></p>'
+        )
+    )
+    for fid, name, body in ((801, "diagram.png", b"PNG"), (802, "Handout.pdf", b"PDF")):
+        respx.get(f"{API}/courses/1/files/{fid}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": fid,
+                    "display_name": name,
+                    "size": 3,
+                    "url": f"https://files.test/{fid}",
+                },
+            )
+        )
+        respx.get(url__startswith=f"https://files.test/{fid}").mock(
+            return_value=httpx.Response(200, content=body)
+        )
+
+    stats = await Archiver(client, tmp_path, build_html=False).run()
+    course = next((tmp_path / "courses").iterdir())
+
+    assert (course / "_media" / "diagram.png").exists()
+    assert (course / "files" / "Handout.pdf").exists()
+    assert stats.inline_images == 1
+    assert stats.linked_files == 1
+    await client.aclose()
+
+
+@respx.mock
+async def test_inaccessible_linked_file_is_a_skip_not_a_crash(client, tmp_path):
+    _mount(page_body='<a href="https://canvas.test/courses/1/files/999">Secret.pdf</a>')
+    respx.get(f"{API}/courses/1/files/999").mock(return_value=httpx.Response(403))
+
+    stats = await Archiver(client, tmp_path, build_html=False).run()
+    assert stats.skipped["linked file not accessible"] == 1
+    assert stats.errors == []
+    await client.aclose()
+
+
+@respx.mock
+async def test_sideways_canvas_links_point_at_local_copies(client, tmp_path):
+    """Links to a module or assignment page die with the account; repoint them."""
+    _mount(
+        assignments=[{"id": 77, "name": "The essay"}],
+        page_body=(
+            '<p><a href="https://canvas.test/courses/1/modules/55">Module 1</a> '
+            '<a href="https://canvas.test/courses/1/assignments/77">The essay</a> '
+            '<a href="https://canvas.test/courses/1">Course home</a></p>'
+        ),
+    )
+    await Archiver(client, tmp_path, build_html=False).run()
+    pages_md = (next((tmp_path / "courses").iterdir()) / "pages" / "pages.md").read_text()
+
+    assert "canvas.test/courses/1/modules/55" not in pages_md
+    assert "modules/modules.md" in pages_md.replace("%20", " ")
+    assert "assignments/assignments.md" in pages_md.replace("%20", " ")
+    assert "README.md" in pages_md
+    await client.aclose()
+
+
+@respx.mock
+async def test_links_to_other_courses_are_left_alone(client, tmp_path):
+    """We have no local copy of a course you aren't enrolled in; don't fake one."""
+    _mount(page_body='<a href="https://canvas.test/courses/430/modules/9">Elsewhere</a>')
+    await Archiver(client, tmp_path, build_html=False).run()
+    pages_md = (next((tmp_path / "courses").iterdir()) / "pages" / "pages.md").read_text()
+    assert "canvas.test/courses/430/modules/9" in pages_md
+    await client.aclose()
+
+
+@respx.mock
+async def test_link_to_a_section_we_did_not_archive_is_left_alone(client, tmp_path):
+    """--only pages means there is no discussions.md to point at."""
+    _mount(page_body='<a href="https://canvas.test/courses/1/discussion_topics/3">Thread</a>')
+    await Archiver(client, tmp_path, content={"pages", "modules"}, build_html=False).run()
+    pages_md = (next((tmp_path / "courses").iterdir()) / "pages" / "pages.md").read_text()
+    assert "canvas.test/courses/1/discussion_topics/3" in pages_md
+    await client.aclose()
+
+
+# --- byte accounting across every download path ------------------------------
+
+
+class _ByteRecorder:
+    """Minimal progress sink that records only the byte counters."""
+
+    def __init__(self):
+        self.total = 0
+        self.advanced = 0
+
+    def __getattr__(self, _name):
+        return lambda *a, **k: None
+
+    def add_bytes_total(self, count):
+        self.total += count
+
+    def advance_bytes(self, count):
+        self.advanced += count
+
+
+@respx.mock
+async def test_bytes_are_counted_for_course_files(client, tmp_path):
+    _mount()
+    rec = _ByteRecorder()
+    await Archiver(client, tmp_path, progress=rec, build_html=False).run()
+    assert rec.total == len(PDF)
+    assert rec.advanced == len(PDF)
+    await client.aclose()
+
+
+@respx.mock
+async def test_bytes_are_counted_for_submission_attachments(client, tmp_path):
+    """Regression: attachments downloaded without reporting a single byte."""
+    _mount(submissions=[FILE_SUBMISSION])
+    rec = _ByteRecorder()
+    await Archiver(client, tmp_path, progress=rec, build_html=False).run()
+    # The course file plus the 8-byte essay attachment.
+    assert rec.total == len(PDF) + 8
+    assert rec.advanced == len(PDF) + 8
+    await client.aclose()
+
+
+@respx.mock
+async def test_bytes_are_counted_for_linked_files(client, tmp_path):
+    """Regression: syllabus PDFs downloaded without reporting a single byte."""
+    _mount(syllabus='<a href="https://canvas.test/courses/1/files/700">S.pdf</a>')
+    respx.get(f"{API}/courses/1/files/700").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": 700, "display_name": "S.pdf", "size": 9, "url": "https://files.test/700"},
+        )
+    )
+    respx.get(url__startswith="https://files.test/700").mock(
+        return_value=httpx.Response(200, content=b"SYLLABUS!")
+    )
+    rec = _ByteRecorder()
+    await Archiver(client, tmp_path, progress=rec, build_html=False).run()
+    assert rec.total == len(PDF) + 9
+    assert rec.advanced == len(PDF) + 9
+    await client.aclose()
+
+
+@respx.mock
+async def test_already_present_files_still_advance_the_bar(client, tmp_path):
+    """A resumed run must not sit at zero while it is clearly doing work."""
+    _mount()
+    await Archiver(client, tmp_path, build_html=False).run()
+
+    rec = _ByteRecorder()
+    stats = await Archiver(client, tmp_path, progress=rec, build_html=False).run()
+    assert stats.files_skipped == 1  # nothing re-downloaded
+    assert rec.advanced == len(PDF)  # but the bar still reaches 100%
+    assert rec.total == len(PDF)
     await client.aclose()

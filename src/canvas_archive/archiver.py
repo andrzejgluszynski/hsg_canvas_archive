@@ -34,10 +34,34 @@ log = logging.getLogger(__name__)
 _VERIFIER = re.compile(r"(?:&amp;|[?&])verifier=[A-Za-z0-9._~-]+", re.I)
 
 
-# Images embedded in Canvas HTML bodies point back at course files by URL. Left alone
-# they turn the "offline" viewer into one that needs the internet -- and needs the
-# account that is about to be revoked.
-_INLINE_IMAGE = re.compile(r"!\[([^\]]*)\]\((https?://[^)\s]*?/courses/(\d+)/files/(\d+)[^)\s]*)\)")
+# Canvas text refers to course files by URL, as embedded images and as ordinary
+# links. Left alone they turn the "offline" viewer into one that needs the internet
+# -- and needs the account that is about to be revoked.
+#
+# Links matter at least as much as images: syllabus PDFs, reading lists and handouts
+# are routinely linked from a page or announcement and never placed in a module, so
+# module-first traversal alone never sees them.
+_FILE_REF = re.compile(r"(!?)\[([^\]]*)\]\((https?://[^)\s]*?/courses/(\d+)/files/(\d+)[^)\s]*)\)")
+
+# Canvas also links sideways -- to a module, an assignment, another page, the course
+# home. Those URLs die with the account, so they are repointed at the local copies we
+# already hold. Anything we cannot resolve locally is left alone rather than broken.
+_NAV_REF = re.compile(
+    r"(?<!\!)\[([^\]]*)\]\((https?://[^)\s]*?/courses/(\d+)"
+    r"(/(?:modules|assignments|pages|announcements|discussion_topics|quizzes|grades)"
+    r"[^)\s]*)?)\)"
+)
+
+# Where each kind of Canvas page lives inside a course folder.
+_NAV_TARGETS = {
+    "modules": "modules/modules.md",
+    "assignments": "assignments/assignments.md",
+    "pages": "pages/pages.md",
+    "announcements": "announcements/announcements.md",
+    "discussion_topics": "discussions/discussions.md",
+    "quizzes": "quizzes/quizzes.md",
+    "grades": "grades/grades.md",
+}
 
 
 def strip_verifier(text: str | None) -> str | None:
@@ -94,6 +118,7 @@ class Stats:
     quizzes: int = 0
     discussion_posts: int = 0
     inline_images: int = 0
+    linked_files: int = 0
     json_records: Counter = field(default_factory=Counter)
     skipped: Counter = field(default_factory=Counter)
     errors: list[str] = field(default_factory=list)
@@ -122,15 +147,25 @@ class Archiver:
         content: set[str] | None = None,
         progress=None,
         build_html: bool = True,
+        course_workers: int = 0,
     ) -> None:
         self.client = client
         self.out = out
         self.progress = progress
         self.build_html = build_html
+        # 0 means every course at once. The real ceilings are the HTTP client's two
+        # pools -- the API rate-limit governor and the download pool -- which every
+        # request passes through regardless of how many courses are in flight. Bounding
+        # courses as well only helps if you want to cap memory or tidy the display.
+        self.course_workers = max(0, course_workers)
         self.stats = Stats()
         self._failed: list[tuple[int, Path, dict, str]] = []
         self._index: list[dict] = []
         self._graded: dict[int, list[dict]] = {}
+        # Where each module item's content actually landed, so the structure page can
+        # link to it. Populated as files and pages are archived.
+        self._file_links: dict[int, dict] = {}
+        self._page_links: dict[int, dict] = {}
         self.content = content or {
             "files",
             "pages",
@@ -183,19 +218,29 @@ class Archiver:
         if self.progress:
             self.progress.start_courses(len(courses))
 
-        for index, course in enumerate(courses, 1):
-            log.info("[%d/%d] %s", index, len(courses), course.get("name"))
-            if self.progress:
-                self.progress.start_course(course.get("name") or "course", index, len(courses))
-            try:
-                await self.archive_course(course, grades_by_course.get(course["id"]))
-                self.stats.courses += 1
-            except Exception as exc:  # keep going -- one bad course must not end the run
-                log.error("course %s failed: %s", course.get("id"), exc)
-                self.stats.errors.append(f"course {course.get('id')}: {exc}")
-            finally:
-                if self.progress:
-                    self.progress.finish_course()
+        gate = asyncio.Semaphore(self.course_workers or len(courses) or 1)
+
+        async def one(course: dict) -> None:
+            async with gate:
+                handle = (
+                    self.progress.add_course(course.get("name") or "course")
+                    if self.progress
+                    else None
+                )
+                try:
+                    await self.archive_course(course, grades_by_course.get(course["id"]), handle)
+                    self.stats.courses += 1
+                except Exception as exc:  # one bad course must not end the run
+                    log.error("course %s failed: %s", course.get("id"), exc)
+                    self.stats.errors.append(f"course {course.get('id')}: {exc}")
+                finally:
+                    if self.progress:
+                        self.progress.finish_course(handle)
+
+        await asyncio.gather(*(one(c) for c in courses))
+
+        # Deterministic output regardless of the order courses happened to finish in.
+        self._index.sort(key=lambda e: e["name"].lower())
 
         await self.retry_failed()
 
@@ -220,7 +265,42 @@ class Archiver:
         )
         return self.stats
 
-    async def archive_course(self, course: dict, grades: dict | None) -> None:
+    async def _download(
+        self,
+        url: str,
+        dest: Path,
+        *,
+        size: int | None = None,
+        refresh=None,
+    ):
+        """Download a file and keep the byte counter honest.
+
+        Every download in the archive goes through here. The byte total is learned as
+        sizes are discovered rather than pre-scanned, and an already-present file still
+        advances the bar -- otherwise a resumed run sits at zero while clearly working.
+        """
+        if self.progress and size:
+            self.progress.add_bytes_total(size)
+
+        result = await self.client.download(
+            url,
+            dest,
+            expected_size=size,
+            refresh=refresh,
+            on_bytes=self.progress.advance_bytes if self.progress else None,
+        )
+
+        if result.skipped and self.progress and size:
+            self.progress.advance_bytes(size)
+        return result
+
+    def _note(self, handle: object, step: str) -> None:
+        if self.progress and handle is not None:
+            self.progress.set_step(handle, step)
+
+    async def archive_course(
+        self, course: dict, grades: dict | None, handle: object = None
+    ) -> None:
         cdir = self.out / "courses" / course_dirname(course)
         cdir.mkdir(parents=True, exist_ok=True)
         cid = course["id"]
@@ -235,39 +315,37 @@ class Archiver:
             write_json(cdir / "grades" / "grades.json", grades)
             self.stats.json_records["grades"] += 1
 
-        modules = await self.archive_modules(cid, cdir, counts)
-        if modules:
-            write_md(
-                cdir / "modules" / "modules.md", md.modules_md(course.get("name") or "", modules)
-            )
+        self._note(handle, "modules")
+        try:
+            modules = await self.archive_modules(cid, cdir, counts)
+        except Exception as exc:
+            # Modules are the backbone of the traversal, but losing them must not cost
+            # the course its grades, submissions and announcements too.
+            log.warning("modules failed for course %s: %s", cid, exc)
+            self.stats.errors.append(f"course {cid} modules: {exc}")
+            modules = []
 
-        for key, path, params in (
-            ("assignments", "assignments", {}),
-            ("announcements", "discussion_topics", {"only_announcements": "true"}),
-        ):
-            if not self.want(key):
-                continue
+        async def simple(key: str, path: str, params: dict) -> int:
             items = [i async for i in self.client.paginate(f"courses/{cid}/{path}", **params)]
             if not items:
-                continue
+                return 0
             write_json(cdir / key / f"{key}.json", items)
             self.stats.json_records[key] += len(items)
-            counts[key] = len(items)
-
-            name = course.get("name") or ""
             renderer = {
                 "assignments": md.assignments_md,
                 "announcements": md.announcements_md,
             }[key]
-            write_md(cdir / key / f"{key}.md", renderer(name, items))
+            write_md(cdir / key / f"{key}.md", renderer(course.get("name") or "", items))
+            return len(items)
 
         # Each exporter is isolated: a course must not lose its files because its
         # quizzes endpoint misbehaved.
-        async def step(key: str, coro):
+        async def step(key: str, factory) -> None:
             if not self.want(key):
                 return
+            self._note(handle, key)
             try:
-                result = await coro
+                result = await factory()
             except Exception as exc:
                 log.warning("%s failed for course %s: %s", key, cid, exc)
                 self.stats.errors.append(f"course {cid} {key}: {exc}")
@@ -275,10 +353,34 @@ class Archiver:
             if isinstance(result, int):
                 counts[key] = result
 
-        await step("discussions", self.archive_discussions(cid, cdir, course))
-        await step("quizzes", self.archive_quizzes(cid, cdir, course, modules))
-        await step("submissions", self.archive_submissions(cid, cdir))
-        await step("files", self.archive_files(cid, cdir, modules))
+        # These exporters are independent of one another, so they run together. The
+        # rate-limit governor still serialises the actual requests.
+        await asyncio.gather(
+            step("assignments", lambda: simple("assignments", "assignments", {})),
+            step(
+                "announcements",
+                lambda: simple(
+                    "announcements", "discussion_topics", {"only_announcements": "true"}
+                ),
+            ),
+            step("discussions", lambda: self.archive_discussions(cid, cdir, course)),
+            step("quizzes", lambda: self.archive_quizzes(cid, cdir, course, modules)),
+            step("submissions", lambda: self.archive_submissions(cid, cdir)),
+            step("files", lambda: self.archive_files(cid, cdir, modules, handle)),
+        )
+
+        if modules and self.want("modules"):
+            # Written now, not earlier: it links to files and pages that only exist
+            # once their exporters have run.
+            write_md(
+                cdir / "modules" / "modules.md",
+                md.modules_md(
+                    course.get("name") or "",
+                    modules,
+                    file_links={k: f"../{v}" for k, v in self._file_links.get(cid, {}).items()},
+                    page_links={k: f"../{v}" for k, v in self._page_links.get(cid, {}).items()},
+                ),
+            )
 
         if self.want("grades") and grades:
             write_md(
@@ -289,7 +391,8 @@ class Archiver:
         write_md(cdir / "README.md", md.course_overview(course, grades, counts))
 
         # Last, so it can rewrite every Markdown file this course produced.
-        await self.archive_inline_images(cid, cdir)
+        self._note(handle, "linked files")
+        await self.archive_referenced_files(cid, cdir)
         self._index.append(
             {
                 "name": course.get("name") or str(cid),
@@ -298,66 +401,111 @@ class Archiver:
             }
         )
 
-    async def archive_inline_images(self, cid: int, cdir: Path) -> None:
-        """Download images embedded in course text and repoint them locally.
+    async def archive_referenced_files(self, cid: int, cdir: Path) -> None:
+        """Download every course file referenced from course text, and repoint it.
 
         Runs after the content exporters so it sees every Markdown file the course
-        produced, and rewrites them in place.
+        produced, and rewrites them in place. Embedded images go to `_media/` because
+        they are decoration; linked documents go to `files/` alongside the module
+        files, because that is what they are.
         """
         md_files = list(cdir.rglob("*.md"))
         if not md_files:
             return
 
-        wanted: dict[str, tuple[int, int]] = {}
+        # url -> (course_id, file_id, is_image)  -- may legitimately be empty; the
+        # navigation rewrite below still has work to do.
+        wanted: dict[str, tuple[int, int, bool]] = {}
         for path in md_files:
-            for _alt, url, course_id, file_id in _INLINE_IMAGE.findall(
-                path.read_text(encoding="utf-8", errors="ignore")
-            ):
-                wanted[url] = (int(course_id), int(file_id))
-        if not wanted:
-            return
+            text = fs_path(path).read_text(encoding="utf-8", errors="ignore")
+            for bang, _label, url, course_id, file_id in _FILE_REF.findall(text):
+                # If the same file is ever embedded, treat it as an image: it has to
+                # render inline, and a document copy would be redundant.
+                is_image = bool(bang) or wanted.get(url, (0, 0, False))[2]
+                wanted[url] = (int(course_id), int(file_id), is_image)
 
-        media = cdir / "_media"
         local: dict[str, Path] = {}
-        taken: set[str] = set()
+        taken_media: set[str] = set()
+        taken_files = {p.name.casefold() for p in (cdir / "files").glob("*") if p.is_file()}
+        added: list[dict] = []
 
-        for url, (course_id, file_id) in wanted.items():
+        for url, (course_id, file_id, is_image) in wanted.items():
             meta = await self.client.get_optional(f"courses/{course_id}/files/{file_id}")
             if not meta or not meta.get("url"):
-                self.stats.skipped["embedded image not accessible"] += 1
+                self.stats.skipped["linked file not accessible"] += 1
                 continue
-            name = unique_component(
-                safe_component(meta.get("display_name") or f"image-{file_id}"),
-                file_id,
-                taken,
-            )
-            try:
-                await self.client.download(
-                    meta["url"], media / name, expected_size=meta.get("size")
-                )
-            except Exception as exc:
-                log.debug("embedded image %s failed: %s", file_id, exc)
-                self.stats.skipped["embedded image not accessible"] += 1
-                continue
-            local[url] = media / name
-            self.stats.inline_images += 1
 
-        if not local:
-            return
+            base_name = safe_component(meta.get("display_name") or f"file-{file_id}")
+            if is_image:
+                dest = cdir / "_media" / unique_component(base_name, file_id, taken_media)
+            else:
+                dest = cdir / "files" / unique_component(base_name, file_id, taken_files)
+
+            try:
+                result = await self._download(meta["url"], dest, size=meta.get("size"))
+            except Exception as exc:
+                log.debug("referenced file %s failed: %s", file_id, exc)
+                self.stats.skipped["linked file not accessible"] += 1
+                continue
+
+            local[url] = dest
+            if is_image:
+                self.stats.inline_images += 1
+            else:
+                self.stats.linked_files += 1
+                added.append(meta)
+                if not result.skipped:
+                    self.stats.bytes_downloaded += result.bytes_written
+
+        # Keep files.json honest: it should describe everything sitting in files/.
+        if added:
+            index = cdir / "files" / "files.json"
+            existing: list = []
+            if index.exists():
+                try:
+                    existing = json.loads(fs_path(index).read_text(encoding="utf-8"))
+                except (ValueError, OSError):
+                    existing = []
+            known = {f.get("id") for f in existing if isinstance(f, dict)}
+            existing.extend(f for f in added if f.get("id") not in known)
+            write_json(index, existing)
 
         for path in md_files:
             text = original = fs_path(path).read_text(encoding="utf-8")
 
             def repoint(match: re.Match, *, base: Path = path.parent) -> str:
-                target = local.get(match.group(2))
+                target = local.get(match.group(3))
                 if not target:
                     return match.group(0)
                 rel = as_url_path(os.path.relpath(target, base))
-                return f"![{match.group(1)}]({quote(rel)})"
+                return f"{match.group(1)}[{match.group(2)}]({quote(rel)})"
 
-            text = _INLINE_IMAGE.sub(repoint, text)
+            text = _FILE_REF.sub(repoint, text)
+            text = self._repoint_navigation(text, cdir, path, cid)
             if text != original:
                 fs_path(path).write_text(text, encoding="utf-8")
+
+    def _repoint_navigation(self, text: str, cdir: Path, path: Path, cid: int) -> str:
+        """Point sideways Canvas links at the local copies of those pages."""
+
+        def swap(match: re.Match) -> str:
+            label, _url, course_id, tail = match.groups()
+            if int(course_id) != cid:
+                return match.group(0)  # another course: we may not even have it
+            if not tail:
+                target = cdir / "README.md"
+            else:
+                kind = tail.lstrip("/").split("/")[0].split("?")[0]
+                rel = _NAV_TARGETS.get(kind)
+                if not rel:
+                    return match.group(0)
+                target = cdir / rel
+            if not target.exists():
+                return match.group(0)  # nothing local to point at; leave the URL alone
+            local = as_url_path(os.path.relpath(target, path.parent))
+            return f"[{label}]({quote(local)})"
+
+        return _NAV_REF.sub(swap, text)
 
     async def archive_discussions(self, cid: int, cdir: Path, course: dict) -> int:
         """Discussion topics with their full reply threads.
@@ -554,9 +702,7 @@ class Archiver:
                 taken,
             )
             try:
-                result = await self.client.download(
-                    url, base / name, expected_size=attachment.get("size")
-                )
+                result = await self._download(url, base / name, size=attachment.get("size"))
             except Exception as exc:
                 log.warning("submission attachment failed (%s): %s", name, exc)
                 self.stats.errors.append(f"submission attachment {name}: {exc}")
@@ -612,6 +758,8 @@ class Archiver:
                     safe_component(page.get("title") or slug) + ".html", slug, taken
                 )
                 write_html(cdir / "pages" / name, body)
+                self._page_links.setdefault(cid, {})[slug] = f"pages/{name}"
+
             self.stats.pages += 1
 
         if records:
@@ -619,7 +767,9 @@ class Archiver:
             write_md(cdir / "pages" / "pages.md", md.pages_md("", records))
         return len(records)
 
-    async def archive_files(self, cid: int, cdir: Path, modules: list[dict]) -> int:
+    async def archive_files(
+        self, cid: int, cdir: Path, modules: list[dict], handle: object = None
+    ) -> int:
         """Collect file ids from module items, plus the /files index where permitted."""
         file_ids: list[int] = []
         for module in modules:
@@ -646,11 +796,16 @@ class Archiver:
         if not by_id:
             return 0
 
+        if self.progress and handle is not None:
+            self.progress.add_files(handle, len(by_id))
+
         taken: set[str] = set()
         records = []
         for meta in by_id.values():
             records.append(meta)
             await self.download_file(cid, cdir, meta, taken)
+            if self.progress and handle is not None:
+                self.progress.file_done(handle)
 
         write_json(cdir / "files" / "files.json", records)
         return len(records)
@@ -666,6 +821,7 @@ class Archiver:
             meta.get("id", "x"),
             taken,
         )
+        self._file_links.setdefault(cid, {})[meta.get("id")] = f"files/{name}"
         await self._fetch_one(cid, cdir, meta, name, first_pass=True)
 
     async def _fetch_one(
@@ -674,21 +830,12 @@ class Archiver:
         dest = cdir / "files" / name
         size = meta.get("size")
 
-        if self.progress:
-            self.progress.start_file(name, size)
-
         async def refresh() -> str | None:
             fresh = await self.client.get_optional(f"courses/{cid}/files/{meta['id']}")
             return fresh.get("url") if fresh else None
 
         try:
-            result = await self.client.download(
-                meta["url"],
-                dest,
-                expected_size=size,
-                refresh=refresh,
-                on_bytes=self.progress.advance_bytes if self.progress else None,
-            )
+            result = await self._download(meta["url"], dest, size=size, refresh=refresh)
         except Exception as exc:
             if first_pass:
                 # Hold it for the calm second pass rather than failing the run.
@@ -697,20 +844,13 @@ class Archiver:
             else:
                 log.warning("download failed for %s: %s", name, exc)
                 self.stats.errors.append(f"{name}: {exc}")
-            if self.progress:
-                self.progress.finish_file(failed=True)
             return False
 
         if result.skipped:
             self.stats.files_skipped += 1
-            if self.progress and size:
-                self.progress.advance_bytes(size)
         else:
             self.stats.files_downloaded += 1
             self.stats.bytes_downloaded += result.bytes_written
-
-        if self.progress:
-            self.progress.finish_file()
         return True
 
     async def retry_failed(self) -> None:

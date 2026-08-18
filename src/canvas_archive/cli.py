@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -85,12 +86,34 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--course", action="append", type=int, help="limit to course id (repeatable)"
     )
-    parser.add_argument("--concurrency", type=int, default=6)
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=6,
+        help="simultaneous HTTP requests (default: 6)",
+    )
+    parser.add_argument(
+        "--course-workers",
+        type=int,
+        default=0,
+        help="courses archived at the same time (default: 0 = all at once)",
+    )
+    parser.add_argument(
+        "--download-concurrency",
+        type=int,
+        default=8,
+        help="simultaneous file downloads (default: 8)",
+    )
     parser.add_argument(
         "--retries", type=int, default=5, help="attempts per file before giving up (default: 5)"
     )
     parser.add_argument("--plain", action="store_true", help="disable the progress bar")
     parser.add_argument("--no-html", action="store_true", help="skip the offline HTML viewer")
+    parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="don't open the archive in your browser when it finishes",
+    )
     parser.add_argument(
         "--no-wizard", action="store_true", help="never prompt; fail if the token is missing"
     )
@@ -157,7 +180,11 @@ async def run(args: argparse.Namespace) -> int:
     progress = make_progress(force_plain=args.plain)
 
     async with CanvasClient(
-        base_url, token, concurrency=args.concurrency, retries=args.retries
+        base_url,
+        token,
+        concurrency=args.concurrency,
+        download_concurrency=args.download_concurrency,
+        retries=args.retries,
     ) as client:
         # Surface waits in the UI so a throttled run never looks like a hang.
         client.throttle.on_wait = progress.note
@@ -175,10 +202,11 @@ async def run(args: argparse.Namespace) -> int:
                 content=content,
                 progress=progress,
                 build_html=not args.no_html,
+                course_workers=args.course_workers,
             )
             stats = await archiver.run(set(args.course) if args.course else None)
 
-    print_summary(stats, output.expanduser(), wizard_used)
+    print_summary(stats, output.expanduser(), wizard_used, open_browser=not args.no_open)
     return 0
 
 
@@ -201,7 +229,26 @@ def friendly_auth_error(exc: Exception, base_url: str) -> str:
     )
 
 
-def print_summary(stats, output, wizard_used: bool) -> None:
+def open_in_browser(index: Path) -> None:
+    """Show the finished archive.
+
+    Only for an interactive run: popping a browser out of a cron job or a CI step is an
+    unwelcome surprise. The path is printed either way, so nothing is lost when this
+    does nothing -- which is also what happens on a headless Linux box.
+    """
+    if not sys.stdout.isatty():
+        return
+    if os.environ.get("CI") or os.environ.get("CANVAS_ARCHIVE_NO_OPEN"):
+        return
+    try:
+        import webbrowser
+
+        webbrowser.open(index.as_uri())
+    except Exception as exc:  # a missing browser must never fail the run
+        logging.debug("could not open a browser: %s", exc)
+
+
+def print_summary(stats, output, wizard_used: bool, *, open_browser: bool = True) -> None:
     line = "=" * 60
     print("\n" + line)
     print("  Done.\n")
@@ -216,6 +263,8 @@ def print_summary(stats, output, wizard_used: bool) -> None:
             f"  Your submissions {stats.submissions}"
             f"   ({stats.submission_files} files, {human(stats.submission_bytes)})"
         )
+    if stats.linked_files:
+        print(f"  Linked documents {stats.linked_files}   (syllabus PDFs, handouts)")
     if stats.quizzes:
         print(f"  Quizzes          {stats.quizzes}")
     if stats.discussion_posts:
@@ -240,8 +289,12 @@ def print_summary(stats, output, wizard_used: bool) -> None:
         print("\n  Just run the tool again -- it picks up where it left off.")
 
     print(f"\n  Your archive is here:\n    {output.resolve()}")
-    if stats.html_pages:
-        print(f"  Open this in your browser to read it:\n    {(output / 'index.html').resolve()}")
+
+    index = (output / "index.html").resolve()
+    if stats.html_pages and index.exists():
+        print(f"  Open this in your browser to read it:\n    {index}")
+        if open_browser:
+            open_in_browser(index)
     print(line)
     if wizard_used and sys.stdin.isatty():
         try:

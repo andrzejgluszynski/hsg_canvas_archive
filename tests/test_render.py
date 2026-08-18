@@ -137,7 +137,7 @@ def test_modules_md_renders_structure_with_links():
     )
     assert "## Week 1" in out
     assert "**Readings**" in out
-    assert "[file] Slides.pdf" in out
+    assert "*file* · Slides.pdf" in out  # no local copy -> plain text
     assert "[Video](https://v/1)" in out
 
 

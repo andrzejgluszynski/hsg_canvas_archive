@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -55,6 +56,7 @@ class CanvasClient:
         token: str,
         *,
         concurrency: int = 6,
+        download_concurrency: int = 8,
         timeout: float = 30.0,
         retries: int = 5,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -65,9 +67,15 @@ class CanvasClient:
         self.retries = max(1, retries)
         self.throttle = Throttle(concurrency)
 
-        limits = httpx.Limits(
-            max_connections=concurrency * 2, max_keepalive_connections=concurrency
-        )
+        # File transfers get their own pool, deliberately separate from the API
+        # rate-limit governor. They are bandwidth-bound, not quota-bound, and they run
+        # against the CDN rather than the API. Sharing one semaphore meant a single
+        # 400 MB lecture recording occupied an API slot for its entire transfer, which
+        # throttled every other course on the account.
+        self.download_slots = asyncio.Semaphore(max(1, download_concurrency))
+
+        pool = concurrency + download_concurrency
+        limits = httpx.Limits(max_connections=pool * 2, max_keepalive_connections=pool)
         # A separate read timeout is the point: the observed throttling failure is a
         # connection that is accepted and then never answered. Without this the run
         # freezes instead of retrying.
@@ -225,7 +233,7 @@ class CanvasClient:
             headers = {"Range": f"bytes={resume_from}-"} if resume_from else {}
 
             try:
-                await self.throttle.acquire()
+                await self.download_slots.acquire()
                 try:
                     async with self._file_client.stream("GET", url, headers=headers) as response:
                         if response.status_code in PERMISSION_STATUSES:
@@ -251,7 +259,7 @@ class CanvasClient:
                                 if on_bytes:
                                     on_bytes(len(chunk))
                 finally:
-                    self.throttle.release()
+                    self.download_slots.release()
 
             except (httpx.TransportError, httpx.HTTPStatusError) as exc:
                 last_error = exc

@@ -317,30 +317,54 @@ def quizzes_md(course_name: str, quizzes: list[dict]) -> str:
     return _render(lines)
 
 
-def modules_md(course_name: str, modules: list[dict]) -> str:
-    """The course structure -- the closest thing to a table of contents."""
+def modules_md(
+    course_name: str,
+    modules: list[dict],
+    *,
+    file_links: dict | None = None,
+    page_links: dict | None = None,
+) -> str:
+    """The course structure -- the closest thing to a table of contents.
+
+    Each item links to whatever was actually archived for it. Listing a file by name
+    without linking to the copy sitting one folder away is the sort of thing that makes
+    an archive feel broken.
+    """
+    file_links = file_links or {}
+    page_links = page_links or {}
     lines = [f"# Course structure — {course_name}", ""]
-    icons = {
-        "File": "[file]",
-        "Page": "[page]",
-        "ExternalUrl": "[link]",
-        "Assignment": "[task]",
-        "Quiz": "[quiz]",
-        "SubHeader": "",
+    labels = {
+        "File": "file",
+        "Page": "page",
+        "ExternalUrl": "link",
+        "Assignment": "task",
+        "Quiz": "quiz",
+        "Discussion": "discussion",
     }
+
     for module in modules:
         lines += [f"## {module.get('name') or 'Module'}", ""]
         for item in module.get("items") or []:
             kind = item.get("type") or ""
-            title = item.get("title") or ""
+            title = (item.get("title") or "").strip() or "Untitled"
+
             if kind == "SubHeader":
                 lines.append(f"**{title}**")
                 continue
-            tag = icons.get(kind, f"[{kind.lower()}]")
-            if kind == "ExternalUrl" and item.get("external_url"):
-                lines.append(f"- {tag} [{title}]({item['external_url']})")
+
+            label = labels.get(kind, kind.lower() or "item")
+            target = None
+            if kind == "File":
+                target = file_links.get(item.get("content_id"))
+            elif kind == "Page":
+                target = page_links.get(item.get("page_url"))
+            elif kind == "ExternalUrl":
+                target = item.get("external_url")
+
+            if target:
+                lines.append(f"- *{label}* · [{title}]({quote(str(target), safe='/:?=&#')})")
             else:
-                lines.append(f"- {tag} {title}")
+                lines.append(f"- *{label}* · {title}")
         lines.append("")
     return _render(lines)
 
