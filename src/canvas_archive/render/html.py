@@ -198,7 +198,7 @@ input.q{
 .g-pct{color:var(--muted);font-size:.8125rem;font-variant-numeric:tabular-nums;
        min-width:4.5ch;text-align:right}
 @media (max-width:34rem){.g-track{display:none}}
-object.pdf{
+iframe.pdf{
   display:block;width:100%;height:min(78vh,60rem);margin:1.25rem 0;
   border:1px solid var(--rule);border-radius:var(--radius);background:var(--surface);
 }
@@ -225,7 +225,7 @@ footer a:hover{color:var(--accent)}
     --bg:#fff;--surface:#fff;--fg:#111;--muted:#444;--rule:#ccc;--accent:#000;--accent-soft:#f4f4f4;--shadow:none
   }
   nav.crumbs,footer,.theme,.skip{display:none}
-  .card,.tablewrap,blockquote,object.pdf{break-inside:avoid;page-break-inside:avoid}
+  .card,.tablewrap,blockquote,iframe.pdf{break-inside:avoid;page-break-inside:avoid}
   body{background:#fff;color:#111}
 }
 """
@@ -307,7 +307,7 @@ _IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
 PAGE_SUFFIXES = {".html", ".htm", ""}
 # Chrome's PDF viewer is a nested frame, so frame-src 'none' blanks every
-# in-page <object>. 'self' covers http(s) archives; file: covers file://
+# in-page embed. 'self' covers http(s) archives; file: covers file://
 # (USB / webbrowser.open), where 'self' is an opaque origin and matches nothing.
 _CSP = (
     "default-src 'none'; img-src 'self' data: blob: file:; style-src 'unsafe-inline'; "
@@ -315,6 +315,15 @@ _CSP = (
     "object-src 'self' blob: file:; base-uri 'none'"
 )
 _CSP_SEARCH = _CSP + "; script-src 'unsafe-inline'"
+# Viewer pages must not set default-src / frame-src / object-src: Chromium's PDF
+# plugin is chrome-extension://, which no enumerating policy can list portably,
+# and file:// archives still fail 'self'. These pages only interpolate an
+# escaped filename, so loosening CSP here does not reopen XSS on the rest of
+# the site.
+_CSP_PDF = (
+    "img-src 'self' data: blob: file:; style-src 'unsafe-inline'; "
+    "script-src 'none'; base-uri 'none'"
+)
 
 
 def _safe_url(url: str) -> str | None:
@@ -588,9 +597,11 @@ def _kind(path: Path) -> str:
 def pdf_viewer(pdf: Path, *, depth: int, crumbs: str) -> str:
     """A page that shows a PDF inline, with the archive's navigation still around it.
 
-    Clicking a document should not eject you from the archive. `<object>` uses the
-    browser's own PDF viewer and falls back to its child content when there isn't one,
-    so this degrades to a plain link rather than an empty frame.
+    Clicking a document should not eject you from the archive. `<iframe>` is what
+    Chromium actually uses for an in-page PDF (it rewrites `<object>` into one).
+    A CSP that lists frame sources still blanks Chrome's chrome-extension://
+    plugin, so these pages use `_CSP_PDF` instead. "Open directly" is the
+    escape hatch when the browser has no inline viewer.
     """
     name = html_mod.escape(pdf.name)
     target = quote(pdf.name)
@@ -598,12 +609,9 @@ def pdf_viewer(pdf: Path, *, depth: int, crumbs: str) -> str:
         f"<h1>{name}</h1>"
         f'<p class="sub">{_size(pdf.stat().st_size)}'
         f' · <a href="./{target}" target="_blank" rel="noopener">open directly</a></p>'
-        f'<object class="pdf" data="./{target}" type="application/pdf">'
-        f"<p>Your browser can't show this PDF inline. "
-        f'<a href="./{target}" target="_blank" rel="noopener">Open {name}</a> instead.</p>'
-        f"</object>"
+        f'<iframe class="pdf" src="./{target}" title="{name}"></iframe>'
     )
-    return page(pdf.name, body, crumbs=crumbs, depth=depth)
+    return page(pdf.name, body, crumbs=crumbs, depth=depth, csp=_CSP_PDF)
 
 
 def file_listing(directory: Path, *, title: str, depth: int, crumbs: str = "") -> str:

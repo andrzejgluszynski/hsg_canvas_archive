@@ -373,12 +373,11 @@ def test_pdfs_get_an_in_page_viewer(tmp_path):
     viewer = course / "files" / "Syllabus.view.html"
     assert viewer.exists()
     html = viewer.read_text()
-    assert '<object class="pdf" data="./Syllabus.pdf"' in html
-    assert 'type="application/pdf"' in html
+    assert '<iframe class="pdf" src="./Syllabus.pdf"' in html
+    assert 'title="Syllabus.pdf"' in html
     assert "open directly" in html  # escape hatch
-    assert "Open Syllabus.pdf" in html  # fallback when no PDF plugin
     assert "All courses" in html  # still inside the archive
-    assert "frame-src 'self'" in html
+    assert "default-src" not in html  # enumerating frames blanks Chrome's plugin
     assert "frame-src 'none'" not in html
 
 
@@ -681,6 +680,20 @@ def test_page_has_csp_skip_link_and_main():
     assert '<main id="main">' in html
     assert 'aria-label="Breadcrumb"' in page("T", "<p>x</p>", crumbs="Home")
     assert "<script" not in html
+
+
+def test_pdf_viewer_uses_a_csp_that_does_not_constrain_frames(tmp_path):
+    """default-src 'none' still blanks Chromium's chrome-extension:// PDF plugin."""
+    from canvas_archive.render.html import _CSP_PDF, pdf_viewer
+
+    pdf = tmp_path / "Syllabus.pdf"
+    pdf.write_bytes(b"%PDF")
+    html = pdf_viewer(pdf, depth=1, crumbs="")
+    assert f'content="{_CSP_PDF}"' in html
+    assert "default-src" not in html
+    assert "frame-src" not in html
+    assert "object-src" not in html
+    assert "script-src 'none'" in html
 
 
 def test_search_page_is_the_only_page_with_a_script(tmp_path):
