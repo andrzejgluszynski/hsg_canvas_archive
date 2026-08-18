@@ -251,3 +251,54 @@ def test_no_external_font_is_requested():
 
     assert "fonts.googleapis" not in CSS and "@font-face" not in CSS
     assert "-apple-system" in CSS  # system stack only
+
+
+# --- link targets ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "target,new_tab",
+    [
+        ("./notes.pdf", True),
+        ("../files/Slides%20v2.pptx", True),
+        ("./recording.mp4", True),
+        ("./sheet.xlsx", True),
+        ("./index.html", False),  # navigation stays in place
+        ("./pages/pages.html", False),
+        ("./sub/", False),  # a folder is navigation
+        ("https://example.com", True),
+    ],
+)
+def test_documents_open_in_a_new_tab_but_pages_do_not(target, new_tab):
+    """Clicking a PDF should not replace the page you were reading."""
+    from canvas_archive.render.html import _link_attrs
+
+    assert ('target="_blank"' in _link_attrs(target)) is new_tab
+
+
+def test_external_links_get_noreferrer():
+    from canvas_archive.render.html import _link_attrs
+
+    assert "noreferrer" in _link_attrs("https://example.com")
+    assert "noreferrer" not in _link_attrs("./local.pdf")  # no referrer to leak
+
+
+def test_markdown_document_links_open_in_a_new_tab():
+    out = markdown_to_html("[Slides](../files/Slides.pdf) then [Grades](./grades.html)")
+    assert '<a href="../files/Slides.pdf" target="_blank" rel="noopener">' in out
+    assert '<a href="./grades.html">' in out
+
+
+def test_file_browser_rows_open_in_a_new_tab(tmp_path):
+    (tmp_path / "README.md").write_text("# A\n")
+    course = tmp_path / "courses" / "C__1"
+    (course / "files").mkdir(parents=True)
+    (course / "README.md").write_text("# C\n")
+    (course / "files" / "paper.pdf").write_bytes(b"x")
+    (course / "files" / "sub").mkdir()
+    (course / "files" / "sub" / "inner.pdf").write_bytes(b"y")
+    build_site(tmp_path)
+
+    html = (course / "files" / "index.html").read_text()
+    assert '<a href="./paper.pdf" target="_blank"' in html  # the document
+    assert '<a href="./sub/index.html">' in html  # the folder

@@ -264,7 +264,10 @@ def print_summary(stats, output, wizard_used: bool, *, open_browser: bool = True
             f"   ({stats.submission_files} files, {human(stats.submission_bytes)})"
         )
     if stats.linked_files:
-        print(f"  Linked documents {stats.linked_files}   (syllabus PDFs, handouts)")
+        print(
+            f"  Linked documents {stats.linked_files}"
+            f"   ({human(stats.linked_bytes)} — syllabus PDFs, handouts)"
+        )
     if stats.quizzes:
         print(f"  Quizzes          {stats.quizzes}")
     if stats.discussion_posts:

@@ -9,6 +9,7 @@ archived at once -- there is no single "current" course to talk about.
 
 from __future__ import annotations
 
+import re
 import sys
 import threading
 
@@ -154,8 +155,24 @@ class RichProgress(NullProgress):
                 self._progress.update(handle, note=f"{int(task.completed)}/{int(task.total)} files")
 
     def finish_course(self, handle: object) -> None:
+        """Leave the finished course on screen, completed and in green.
+
+        Removing it kept the display short, but it also erased the evidence that the
+        work happened -- which is the opposite of reassuring on a long run.
+        """
         if handle is not None:
-            self._progress.remove_task(handle)
+            task = next((t for t in self._progress.tasks if t.id == handle), None)
+            total = (task.total if task and task.total else 1) or 1
+            label = task.description if task else ""
+            # Strip any styling from an earlier update before re-wrapping it.
+            plain = re.sub(r"\[/?[a-z ]+\]", "", label)
+            self._progress.update(
+                handle,
+                total=total,
+                completed=total,
+                description=f"[green]{plain}[/green]",
+                note="[green]done[/green]",
+            )
         if self._overall is not None:
             self._progress.advance(self._overall)
 

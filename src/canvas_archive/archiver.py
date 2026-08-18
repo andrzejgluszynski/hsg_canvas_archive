@@ -119,6 +119,7 @@ class Stats:
     discussion_posts: int = 0
     inline_images: int = 0
     linked_files: int = 0
+    linked_bytes: int = 0
     json_records: Counter = field(default_factory=Counter)
     skipped: Counter = field(default_factory=Counter)
     errors: list[str] = field(default_factory=list)
@@ -455,7 +456,7 @@ class Archiver:
                 self.stats.linked_files += 1
                 added.append(meta)
                 if not result.skipped:
-                    self.stats.bytes_downloaded += result.bytes_written
+                    self.stats.linked_bytes += result.bytes_written
 
         # Keep files.json honest: it should describe everything sitting in files/.
         if added:

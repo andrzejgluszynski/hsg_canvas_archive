@@ -83,25 +83,39 @@ def test_rich_progress_shows_a_line_per_active_course():
     assert "submissions" in text  # per-course step label
 
 
-def test_finished_courses_are_removed_from_the_display():
-    """Otherwise the display grows to the length of the whole degree.
+def test_finished_courses_stay_on_screen_completed():
+    """A finished course keeps its line, in green, with a full bar.
 
-    Asserted against the task list rather than the rendered text: the recording
-    console accumulates every frame, so an earlier frame still shows the course.
+    Removing it kept the display short but erased the evidence that the work
+    happened, which reads as unsettling rather than tidy on a long run.
     """
     console = Console(force_terminal=True, width=90, record=True)
     progress = RichProgress(console=console)
     with progress:
         progress.start_courses(2)
-        a = progress.add_course("Ephemeral Course")
-        progress.add_course("Still Going")
-        descriptions = {t.description for t in progress._progress.tasks}
-        assert "Ephemeral Course" in descriptions
-
+        a = progress.add_course("Finished Course")
+        progress.add_files(a, 7)
+        for _ in range(7):
+            progress.file_done(a)
         progress.finish_course(a)
-        descriptions = {t.description for t in progress._progress.tasks}
-        assert "Ephemeral Course" not in descriptions
-        assert "Still Going" in descriptions
+
+        task = next(t for t in progress._progress.tasks if t.id == a)
+        assert task.completed == task.total  # bar reaches the end
+        assert task.finished
+        assert "green" in task.description  # and is styled as done
+        assert "Finished Course" in task.description
+
+
+def test_a_course_with_no_files_still_completes_its_bar():
+    """Courses that only produce JSON have no file count to fill the bar with."""
+    console = Console(force_terminal=True, width=90, record=True)
+    progress = RichProgress(console=console)
+    with progress:
+        progress.start_courses(1)
+        a = progress.add_course("JSON Only")  # total stays None
+        progress.finish_course(a)
+        task = next(t for t in progress._progress.tasks if t.id == a)
+        assert task.total and task.completed == task.total
 
 
 def test_overall_bar_advances_as_courses_finish():

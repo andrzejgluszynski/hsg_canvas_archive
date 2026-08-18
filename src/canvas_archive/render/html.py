@@ -19,122 +19,158 @@ from urllib.parse import quote
 from ..paths import fs_path
 
 CSS = """
-/* A deliberately small design system. No webfonts and no icon library: the archive
-   must render identically from a USB stick in ten years, so everything is either a
-   system font or an inline SVG. */
-:root {
-  --bg:#fbfaf8; --surface:#fff; --fg:#1c1a17; --muted:#6f6a62;
-  --rule:#e6e1d8; --accent:#8a5a30; --accent-soft:#f2ebe2; --shadow:0 1px 2px rgba(28,26,23,.05);
-  --radius:10px;
-  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",Roboto,
-         "Helvetica Neue",Arial,sans-serif;
-  --serif:ui-serif,Georgia,Cambria,"Times New Roman",serif;
+/* A small, deliberately modern design system. No webfonts and no icon library: the
+   archive must render identically from a USB stick in ten years, so type is a system
+   stack and every icon is an inline SVG.
+
+   `system-ui` resolves to SF Pro on macOS, Segoe UI Variable on Windows 11 and Roboto
+   on Android -- the native UI face on each, which is what makes it feel current
+   without shipping a font. Inter is listed first for anyone who has it. */
+:root{
+  --bg:#fcfcfd; --surface:#fff; --fg:#0e1116; --muted:#656d7b;
+  --rule:#e7e9ee; --accent:#2f5cff; --accent-soft:#f0f3ff;
+  --shadow:0 1px 2px rgba(14,17,22,.04), 0 1px 8px rgba(14,17,22,.03);
+  --radius:12px;
+  --sans:Inter,"SF Pro Text",system-ui,-apple-system,"Segoe UI Variable Text",
+         "Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
 }
 @media (prefers-color-scheme:dark){
   :root{
-    --bg:#16150f; --surface:#1e1c18; --fg:#eae5dc; --muted:#9a938a;
-    --rule:#2f2c26; --accent:#d9a273; --accent-soft:#2a231c; --shadow:none;
+    --bg:#0c0d11; --surface:#14161c; --fg:#e8eaf0; --muted:#949cab;
+    --rule:#222630; --accent:#8ea6ff; --accent-soft:#161a24; --shadow:none;
   }
 }
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{
   margin:0;background:var(--bg);color:var(--fg);
-  font-family:var(--sans);font-size:16.5px;line-height:1.7;
-  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+  font-family:var(--sans);font-size:16px;line-height:1.65;font-weight:400;
+  font-feature-settings:"cv05" 1,"ss01" 1;
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
 }
-.wrap{max-width:46rem;margin:0 auto;padding:2.75rem 1.5rem 6rem}
+.wrap{max-width:44rem;margin:0 auto;padding:3rem 1.5rem 6rem}
 
 /* --- masthead ---------------------------------------------------------- */
 nav.crumbs{
-  display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;
-  font-size:.82rem;color:var(--muted);margin-bottom:2.25rem;
+  display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;
+  font-size:.8125rem;font-weight:500;color:var(--muted);margin-bottom:2.5rem;
 }
-nav.crumbs a{color:var(--muted);text-decoration:none;border-bottom:1px solid transparent}
-nav.crumbs a:hover{color:var(--accent);border-bottom-color:var(--accent)}
-nav.crumbs .sep{opacity:.45}
+nav.crumbs a{
+  display:inline-flex;align-items:center;gap:.3rem;color:var(--muted);
+  text-decoration:none;padding:.2rem .5rem;margin-left:-.5rem;border-radius:6px;
+  transition:background .12s ease,color .12s ease;
+}
+nav.crumbs a:hover{color:var(--accent);background:var(--accent-soft)}
+nav.crumbs .sep{opacity:.35}
 
 /* --- type -------------------------------------------------------------- */
 h1{
-  font-family:var(--serif);font-size:2.05rem;line-height:1.2;font-weight:600;
-  letter-spacing:-.015em;margin:0 0 .6rem;
+  font-size:2rem;line-height:1.15;font-weight:680;
+  letter-spacing:-.032em;margin:0 0 .75rem;
 }
 h2{
-  font-size:1.22rem;font-weight:650;letter-spacing:-.005em;
-  margin:2.75rem 0 .9rem;padding-top:1.4rem;border-top:1px solid var(--rule);
+  font-size:1.1875rem;font-weight:640;letter-spacing:-.017em;
+  margin:3rem 0 1rem;padding-top:1.5rem;border-top:1px solid var(--rule);
 }
-h3{font-size:1.02rem;font-weight:650;margin:1.9rem 0 .5rem}
-h4,h5,h6{font-size:.93rem;font-weight:650;margin:1.4rem 0 .4rem;color:var(--muted)}
-p{margin:0 0 1.05rem}
+h3{font-size:1rem;font-weight:640;letter-spacing:-.011em;margin:2rem 0 .55rem}
+h4,h5,h6{
+  font-size:.75rem;font-weight:620;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);margin:1.75rem 0 .5rem;
+}
+p{margin:0 0 1rem}
 p,li{overflow-wrap:anywhere}
-ul,ol{padding-left:1.35rem;margin:0 0 1.05rem}
-li{margin:.28rem 0}
+ul,ol{padding-left:1.3rem;margin:0 0 1rem}
+li{margin:.3rem 0}
 li::marker{color:var(--muted)}
-a{color:var(--accent);text-decoration:none;
-  border-bottom:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}
+a{
+  color:var(--accent);text-decoration:none;font-weight:480;
+  border-bottom:1px solid transparent;transition:border-color .12s ease;
+}
 a:hover{border-bottom-color:var(--accent)}
-em{color:var(--muted);font-style:normal}
-strong{font-weight:650}
-code{font-family:var(--mono);background:var(--accent-soft);padding:.13em .38em;
-     border-radius:4px;font-size:.88em}
-pre{background:var(--accent-soft);padding:1rem 1.1rem;border-radius:var(--radius);
-    overflow-x:auto;line-height:1.55}
+em{color:var(--muted);font-style:normal;font-size:.9375rem}
+strong{font-weight:620;color:var(--fg)}
+code{
+  font-family:var(--mono);background:var(--accent-soft);padding:.14em .4em;
+  border-radius:5px;font-size:.855em;
+}
+pre{
+  background:var(--surface);border:1px solid var(--rule);padding:1rem 1.15rem;
+  border-radius:var(--radius);overflow-x:auto;line-height:1.55;
+}
 pre code{background:none;padding:0}
 blockquote{
-  margin:1rem 0;padding:.15rem 0 .15rem 1.15rem;
+  margin:1rem 0;padding:.1rem 0 .1rem 1.15rem;
   border-left:2px solid var(--rule);color:var(--fg);
 }
 blockquote blockquote{border-left-color:var(--accent)}
 hr{border:0;border-top:1px solid var(--rule);margin:2.5rem 0}
-p.sub{color:var(--muted);font-size:.9rem;margin:-.25rem 0 1.75rem}
+p.sub{color:var(--muted);font-size:.875rem;margin:-.35rem 0 1.9rem;font-weight:450}
 
 /* --- tables ------------------------------------------------------------ */
-.tablewrap{overflow-x:auto;margin:1.25rem 0;
-           border:1px solid var(--rule);border-radius:var(--radius);background:var(--surface)}
-table{border-collapse:collapse;width:100%;font-size:.93rem}
-th,td{text-align:left;padding:.62rem .85rem;border-bottom:1px solid var(--rule)}
-th{font-weight:600;color:var(--muted);font-size:.72rem;text-transform:uppercase;
-   letter-spacing:.07em;background:var(--accent-soft)}
+.tablewrap{
+  overflow-x:auto;margin:1.25rem 0;border:1px solid var(--rule);
+  border-radius:var(--radius);background:var(--surface);
+}
+table{border-collapse:collapse;width:100%;font-size:.9125rem}
+th,td{text-align:left;padding:.65rem .9rem;border-bottom:1px solid var(--rule)}
+th{
+  font-weight:560;color:var(--muted);font-size:.6875rem;text-transform:uppercase;
+  letter-spacing:.075em;background:transparent;
+}
+td{font-variant-numeric:tabular-nums}
 tr:last-child td{border-bottom:none}
 
 /* --- file browser ------------------------------------------------------ */
-table.files td{padding:.58rem .85rem;vertical-align:middle}
-table.files td.k{width:2.4rem;padding-right:0;color:var(--muted)}
-table.files td.n{text-align:right;color:var(--muted);font-size:.85rem;
-                 white-space:nowrap;font-variant-numeric:tabular-nums}
-table.files a{border-bottom:none;color:var(--fg);font-weight:500}
+table.files td{padding:.6rem .9rem;vertical-align:middle;border-bottom:1px solid var(--rule)}
+table.files td.k{width:2.5rem;padding-right:0;color:var(--muted)}
+table.files td.n{
+  text-align:right;color:var(--muted);font-size:.8125rem;
+  white-space:nowrap;font-variant-numeric:tabular-nums;
+}
+table.files a{border-bottom:none;color:var(--fg);font-weight:480}
+table.files tr{transition:background .1s ease}
 table.files tr:hover td{background:var(--accent-soft)}
-table.files tr:hover a{color:var(--accent)}
+table.files tr:hover td.k,table.files tr:hover a{color:var(--accent)}
 
 /* --- section cards ----------------------------------------------------- */
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(13.5rem,1fr));
-       gap:.7rem;margin:1.4rem 0}
+.cards{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(13rem,1fr));
+  gap:.65rem;margin:1.5rem 0;
+}
 .card{
-  display:flex;align-items:center;gap:.7rem;padding:.85rem 1rem;
+  display:flex;align-items:center;gap:.75rem;padding:.9rem 1rem;
   background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);
   text-decoration:none;color:var(--fg);box-shadow:var(--shadow);
-  transition:border-color .15s ease,transform .15s ease;
+  transition:border-color .14s ease,transform .14s ease,box-shadow .14s ease;
 }
-.card:hover{border-color:var(--accent);transform:translateY(-1px)}
+.card:hover{
+  border-color:var(--accent);transform:translateY(-1px);
+  box-shadow:0 2px 4px rgba(47,92,255,.07),0 4px 16px rgba(47,92,255,.06);
+}
 .card .ico{color:var(--accent);flex:none}
-.card .t{font-weight:600;font-size:.95rem;line-height:1.3}
-.card .s{font-size:.8rem;color:var(--muted);margin-top:.05rem}
+.card .t{font-weight:560;font-size:.9375rem;line-height:1.3;letter-spacing:-.006em}
+.card .s{font-size:.78125rem;color:var(--muted);margin-top:.08rem}
 
 /* --- icons ------------------------------------------------------------- */
-.ico{width:1.15em;height:1.15em;vertical-align:-.2em;flex:none}
-.ico-sm{width:1em;height:1em}
+.ico{width:1.15em;height:1.15em;vertical-align:-.2em;flex:none;stroke-width:1.6}
+.ico-sm{width:.95em;height:.95em}
 
-footer{margin-top:4.5rem;padding-top:1.4rem;border-top:1px solid var(--rule);
-       font-size:.82rem;color:var(--muted)}
-footer a{color:var(--muted)}
+footer{
+  margin-top:5rem;padding-top:1.5rem;border-top:1px solid var(--rule);
+  font-size:.8125rem;color:var(--muted);display:flex;align-items:center;gap:.4rem;
+}
+footer a{color:var(--muted);font-weight:450}
+footer a:hover{color:var(--accent)}
 
 @media (max-width:34rem){
-  .wrap{padding:1.75rem 1.1rem 4rem}
-  h1{font-size:1.7rem}
+  .wrap{padding:2rem 1.15rem 4rem}
+  h1{font-size:1.625rem}
+  h2{font-size:1.0625rem;margin-top:2.25rem}
   .cards{grid-template-columns:1fr}
 }
 """
+
 
 # A tiny inline sprite. Stroke-based so a single set works on both themes, and small
 # enough that repeating it on every page costs less than a single webfont request
@@ -210,12 +246,33 @@ _LINK = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
 _IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
 
+PAGE_SUFFIXES = {".html", ".htm", ""}
+
+
+def _link_attrs(target: str) -> str:
+    """Open documents in a new tab; keep page-to-page navigation in place.
+
+    Clicking a PDF should not replace the page you were reading -- you lose your
+    place in the archive and have to navigate back in. Pages link normally.
+    """
+    if target.startswith(("http://", "https://", "mailto:")):
+        return ' target="_blank" rel="noopener noreferrer"'
+    stem = target.split("?")[0].split("#")[0].rstrip("/")
+    suffix = Path(stem).suffix.lower()
+    if suffix in PAGE_SUFFIXES:
+        return ""
+    return ' target="_blank" rel="noopener"'
+
+
 def _inline(text: str) -> str:
     out = html_mod.escape(text, quote=False)
     out = _IMAGE.sub(
         lambda m: f'<img alt="{m.group(1)}" src="{m.group(2)}" style="max-width:100%">', out
     )
-    out = _LINK.sub(lambda m: f'<a href="{m.group(2)}">{m.group(1) or m.group(2)}</a>', out)
+    out = _LINK.sub(
+        lambda m: f'<a href="{m.group(2)}"{_link_attrs(m.group(2))}>{m.group(1) or m.group(2)}</a>',
+        out,
+    )
     for pattern, repl in _INLINE:
         out = pattern.sub(repl, out)
     return out
@@ -442,7 +499,8 @@ def file_listing(directory: Path, *, title: str, depth: int, crumbs: str = "") -
             note = ""
         rows.append(
             f'<tr><td class="k">{icon(_kind(entry))}</td>'
-            f'<td><a href="./{target}">{html_mod.escape(entry.name)}</a></td>'
+            f'<td><a href="./{target}"{_link_attrs(target)}>'
+            f"{html_mod.escape(entry.name)}</a></td>"
             f'<td class="n">{size or note}</td></tr>'
         )
 
