@@ -134,8 +134,10 @@ class RichProgress(NullProgress):
         self._bytes = self._bytes_progress.add_task("Downloaded", total=0)
 
     def add_course(self, name: str) -> object:
+        from rich.markup import escape
+
         short = name if len(name) <= 34 else name[:31] + "..."
-        return self._progress.add_task(short, total=None, note="starting")
+        return self._progress.add_task(escape(short), total=None, note="starting")
 
     def set_step(self, handle: object, step: str) -> None:
         if handle is not None:

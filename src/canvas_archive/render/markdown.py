@@ -12,9 +12,14 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import quote
 
-from .html2md import html_to_markdown
+from .html2md import _safe_href, html_to_markdown
 
 MAX_BODY = 200_000  # a runaway body should not produce an unopenable file
+
+_PASS_FAIL = frozenset(
+    {"pass", "fail", "credit", "no credit", "complete", "incomplete", "passed", "failed"}
+)
+_SWISS_MARK = re.compile(r"^\d+(?:\.\d+)?$")
 
 
 def fmt_date(value: str | None, *, with_time: bool = True) -> str:
@@ -60,25 +65,70 @@ def _link(label: str, target: str) -> str:
     return f"[{label}](./{quote(target)})"
 
 
+def heading_id(text: str) -> str:
+    """Stable fragment id for a heading, so module items can deep-link into a TOC."""
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    slug = re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE)
+    slug = re.sub(r"[-\s]+", "-", slug.strip()).lower()
+    return slug or "section"
+
+
+def safe_href(url: str | None) -> str | None:
+    """Drop javascript:/data:/vbscript: URLs. Relative, http(s) and mailto stay."""
+    return _safe_href(url)
+
+
+def _is_swiss_mark(value: str) -> bool:
+    if not _SWISS_MARK.match(value.strip()):
+        return False
+    number = float(value)
+    return 1.0 <= number <= 6.0
+
+
 def _grade_line(grades: dict | None) -> str:
+    """A short grade for the index, hub, and grades page — one string, shared.
+
+    Swiss 1–6 courses keep `5.25 / 78.45%`. Pass/fail courses must not look like a
+    perfect percentage: Canvas typically sends `current_score: 100` and no mark.
+    """
     if not grades:
         return ""
+    letter = grades.get("current_grade") or grades.get("final_grade") or ""
+    letter = str(letter).strip()
     score = grades.get("current_score")
-    letter = grades.get("current_grade")
-    if score is None and not letter:
+    if score is None:
+        score = grades.get("final_score")
+
+    if letter and letter.lower() in _PASS_FAIL:
+        return letter
+    if letter and _is_swiss_mark(letter):
+        parts = [letter]
+        if score is not None:
+            parts.append(f"{score}%")
+        return " / ".join(parts)
+    if letter:
+        parts = [letter]
+        if score is not None:
+            parts.append(f"{score}%")
+        return " / ".join(parts)
+    if score is None:
         return ""
-    parts = [
-        p
-        for p in (str(letter) if letter else None, f"{score}%" if score is not None else None)
-        if p
-    ]
-    return " / ".join(parts)
+    try:
+        numeric = float(score)
+    except (TypeError, ValueError):
+        return f"{score}%"
+    if numeric == 100:
+        return "Pass"
+    if numeric == 0:
+        return "Fail"
+    return f"{score}%"
 
 
 # --- per content type --------------------------------------------------------
 
 
-def course_overview(course: dict, grades: dict | None, counts: dict[str, int]) -> str:
+def course_overview(course: dict, grades: dict | None) -> str:
+    """Course hub: identity, grade, syllabus. Section cards are injected in HTML."""
     name = course.get("name") or "Course"
     lines = [f"# {name}", ""]
 
@@ -94,40 +144,54 @@ def course_overview(course: dict, grades: dict | None, counts: dict[str, int]) -
     if meta:
         lines += [" · ".join(meta), ""]
 
-    present = [f"- {n} {k}" for k, n in sorted(counts.items()) if n]
-    if present:
-        lines += ["## What's in this folder", "", *present, ""]
-
     if course.get("syllabus_body"):
         lines += ["## Syllabus", "", _body(course["syllabus_body"]), ""]
 
     return _render(lines)
 
 
-def grades_md(course_name: str, grades: dict | None, submissions: list[dict]) -> str:
+def grades_md(
+    course_name: str,
+    grades: dict | None,
+    submissions: list[dict],
+    *,
+    submission_links: dict | None = None,
+) -> str:
+    submission_links = submission_links or {}
     lines = [f"# Grades — {course_name}", ""]
     overall = _grade_line(grades)
     if overall:
         lines += [f"**Overall: {overall}**", ""]
-        if grades.get("final_score") is not None:
-            lines.append(f"Final score: {grades['final_score']}  ")
-        if grades.get("final_grade"):
-            lines.append(f"Final grade: {grades['final_grade']}")
+        if grades and grades.get("final_score") is not None and overall not in {"Pass", "Fail"}:
+            letter = str(grades.get("current_grade") or "").strip().lower()
+            if letter not in _PASS_FAIL:
+                lines.append(f"Final score: {grades['final_score']}  ")
+        if grades and grades.get("final_grade"):
+            letter = str(grades.get("final_grade")).strip()
+            if letter.lower() not in _PASS_FAIL and not _is_swiss_mark(letter):
+                lines.append(f"Final grade: {grades['final_grade']}")
         lines.append("")
 
     graded = [s for s in submissions if s.get("score") is not None]
-    if graded:
-        lines += ["| Assignment | Score | Out of | Graded |", "|---|---|---|---|"]
-        for sub in graded:
-            assignment = sub.get("assignment") or {}
-            name = (assignment.get("name") or "?").replace("|", "\\|")
-            possible = assignment.get("points_possible")
-            lines.append(
-                f"| {name} | {sub.get('score')} | "
-                f"{possible if possible is not None else '-'} | "
-                f"{fmt_date(sub.get('graded_at'), with_time=False)} |"
-            )
-        lines.append("")
+    if not graded:
+        lines += ["Nothing has been graded yet.", ""]
+        return _render(lines)
+
+    lines += ["| Assignment | Score | Out of | Graded |", "|---|---|---|---|"]
+    for sub in graded:
+        assignment = sub.get("assignment") or {}
+        name = (assignment.get("name") or "?").replace("|", "\\|")
+        aid = assignment.get("id") or sub.get("assignment_id")
+        folder = submission_links.get(aid)
+        if folder:
+            name = f"[{name}](../{quote(folder)}/README.md)"
+        possible = assignment.get("points_possible")
+        lines.append(
+            f"| {name} | {sub.get('score')} | "
+            f"{possible if possible is not None else '-'} | "
+            f"{fmt_date(sub.get('graded_at'), with_time=False)} |"
+        )
+    lines.append("")
     return _render(lines)
 
 
@@ -191,10 +255,24 @@ def submission_md(submission: dict) -> str:
     return _render(lines)
 
 
-def assignments_md(course_name: str, assignments: list[dict]) -> str:
+def assignments_md(
+    course_name: str,
+    assignments: list[dict],
+    *,
+    submission_links: dict | None = None,
+) -> str:
+    """A TOC of assignments. The brief lives on the submission leaf when one exists."""
+    submission_links = submission_links or {}
     lines = [f"# Assignments — {course_name}", ""]
+    if not assignments:
+        lines += ["*No assignments were archived.*", ""]
+        return _render(lines)
+
     for item in assignments:
-        lines.append(f"## {item.get('name') or 'Untitled'}")
+        title = item.get("name") or "Untitled"
+        folder = submission_links.get(item.get("id"))
+        heading = f"[{title}](../{quote(folder)}/README.md)" if folder else title
+        lines.append(f"## {heading}")
         facts = []
         if item.get("due_at"):
             facts.append(f"Due {fmt_date(item['due_at'])}")
@@ -202,9 +280,11 @@ def assignments_md(course_name: str, assignments: list[dict]) -> str:
             facts.append(f"{item['points_possible']} points")
         if facts:
             lines += ["", " · ".join(facts)]
-        body = _body(item.get("description"))
-        if body:
-            lines += ["", body]
+        # Unsubmitted work has no leaf; keep the brief here so it is not lost.
+        if not folder:
+            body = _body(item.get("description"))
+            if body:
+                lines += ["", body]
         lines.append("")
     return _render(lines)
 
@@ -323,6 +403,7 @@ def modules_md(
     *,
     file_links: dict | None = None,
     page_links: dict | None = None,
+    section_links: dict | None = None,
 ) -> str:
     """The course structure -- the closest thing to a table of contents.
 
@@ -332,6 +413,7 @@ def modules_md(
     """
     file_links = file_links or {}
     page_links = page_links or {}
+    section_links = section_links or {}
     lines = [f"# Course structure — {course_name}", ""]
     labels = {
         "File": "file",
@@ -359,7 +441,16 @@ def modules_md(
             elif kind == "Page":
                 target = page_links.get(item.get("page_url"))
             elif kind == "ExternalUrl":
-                target = item.get("external_url")
+                target = safe_href(item.get("external_url"))
+            elif kind == "Assignment":
+                target = section_links.get("assignments")
+            elif kind == "Quiz":
+                target = section_links.get("quizzes")
+            elif kind == "Discussion":
+                target = section_links.get("discussions")
+
+            if target and kind in {"Assignment", "Quiz", "Discussion"}:
+                target = f"{target}#{heading_id(title)}"
 
             if target:
                 lines.append(f"- *{label}* · [{title}]({quote(str(target), safe='/:?=&#')})")
@@ -369,15 +460,32 @@ def modules_md(
     return _render(lines)
 
 
-def pages_md(course_name: str, pages: list[dict]) -> str:
+def page_md(page: dict) -> str:
+    """One Canvas page as its own readable leaf."""
+    lines = [f"# {page.get('title') or 'Untitled'}", ""]
+    if page.get("updated_at"):
+        lines += [f"*Updated {fmt_date(page['updated_at'], with_time=False)}*", ""]
+    body = _body(page.get("body"))
+    if body:
+        lines += [body, ""]
+    return _render(lines)
+
+
+def pages_md(course_name: str, pages: list[dict], *, links: dict | None = None) -> str:
+    """A TOC of pages. Bodies live on the per-page leaves."""
+    links = links or {}
     lines = [f"# Pages — {course_name}", ""]
+    if not pages:
+        lines += ["*No pages were archived.*", ""]
+        return _render(lines)
+    lines += ["| Page | Updated |", "|---|---|"]
     for page in pages:
-        lines += [f"## {page.get('title') or 'Untitled'}", ""]
-        if page.get("updated_at"):
-            lines += [f"*Updated {fmt_date(page['updated_at'], with_time=False)}*", ""]
-        body = _body(page.get("body"))
-        if body:
-            lines += [body, ""]
+        title = (page.get("title") or "Untitled").replace("|", "\\|")
+        href = links.get(page.get("url") or page.get("page_url"))
+        date = fmt_date(page.get("updated_at"), with_time=False) or "—"
+        cell = f"[{title}](./{quote(href)})" if href else title
+        lines.append(f"| {cell} | {date} |")
+    lines.append("")
     return _render(lines)
 
 

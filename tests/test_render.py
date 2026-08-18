@@ -4,10 +4,13 @@ import pytest
 
 from canvas_archive.render.html2md import html_to_markdown as h
 from canvas_archive.render.markdown import (
+    _grade_line,
     announcements_md,
     archive_index,
+    assignments_md,
     grades_md,
     modules_md,
+    pages_md,
     submission_md,
 )
 
@@ -218,3 +221,101 @@ def test_archive_index_escapes_pipes_in_course_names():
         {"name": "S"}, "h", [{"name": "Stats | Methods", "folder": "f__1", "grade": ""}]
     )
     assert r"Stats \| Methods" in out
+
+
+@pytest.mark.parametrize(
+    "grades,expected",
+    [
+        ({"current_score": 100}, "Pass"),
+        ({"current_score": 0}, "Fail"),
+        ({"current_grade": "pass", "current_score": 100}, "pass"),
+        ({"current_grade": "5.25", "current_score": 78.45}, "5.25 / 78.45%"),
+        ({"current_score": 88.5}, "88.5%"),
+        ({"current_grade": "A", "current_score": 91}, "A / 91%"),
+        (None, ""),
+    ],
+)
+def test_grade_line_pass_fail_and_swiss(grades, expected):
+    assert _grade_line(grades) == expected
+
+
+def test_empty_grades_page_has_a_sentence():
+    out = grades_md("C", None, [])
+    assert "Nothing has been graded yet." in out
+
+
+def test_pages_md_is_a_toc():
+    out = pages_md(
+        "C",
+        [{"title": "Intro", "url": "intro", "body": "<p>LONG BODY TEXT</p>"}],
+        links={"intro": "Intro.md"},
+    )
+    assert "[Intro](./Intro.md)" in out
+    assert "LONG BODY TEXT" not in out
+
+
+def test_assignments_md_links_to_submission_leaf():
+    out = assignments_md(
+        "C",
+        [{"id": 7, "name": "Essay", "description": "<p>Write it</p>"}],
+        submission_links={7: "submissions/Essay"},
+    )
+    assert "[Essay](../submissions/Essay/README.md)" in out
+    assert "Write it" not in out
+
+
+def test_javascript_external_url_is_not_linked():
+    out = modules_md(
+        "C",
+        [
+            {
+                "name": "Week 1",
+                "items": [
+                    {
+                        "type": "ExternalUrl",
+                        "title": "Nope",
+                        "external_url": "javascript:alert(1)",
+                    }
+                ],
+            }
+        ],
+    )
+    assert "javascript:" not in out
+    assert "*link* · Nope" in out
+
+
+def test_modules_deep_link_assignments_and_quizzes():
+    out = modules_md(
+        "C",
+        [
+            {
+                "name": "Week 1",
+                "items": [
+                    {"type": "Assignment", "title": "The essay", "content_id": 1},
+                    {"type": "Quiz", "title": "Week quiz", "content_id": 2},
+                    {"type": "Discussion", "title": "Forum", "content_id": 3},
+                ],
+            }
+        ],
+        section_links={
+            "assignments": "../assignments/assignments.md",
+            "quizzes": "../quizzes/quizzes.md",
+            "discussions": "../discussions/discussions.md",
+        },
+    )
+    assert "[The essay](../assignments/assignments.md#the-essay)" in out
+    assert "[Week quiz](../quizzes/quizzes.md#week-quiz)" in out
+    assert "[Forum](../discussions/discussions.md#forum)" in out
+
+
+def test_iframe_and_video_become_an_offline_callout():
+    assert "Embedded video (not saved offline)" in h(
+        '<iframe src="https://www.youtube.com/embed/x" title="Lecture"></iframe>'
+    )
+    assert "Embedded video (not saved offline)" in h("<video src='./clip.mp4'></video>")
+
+
+def test_javascript_href_in_html_is_dropped():
+    out = h('<a href="javascript:alert(1)">click</a>')
+    assert "javascript:" not in out
+    assert "click" in out

@@ -22,6 +22,10 @@ _INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\ufeff\u00a0\u202f\u00ad\
 # Smart quotes that rich-text editors substitute for plain ones.
 _QUOTES = "\"'\u2018\u2019\u201c\u201d\u00ab\u00bb\u2039\u203a`"
 
+# The exact token currently in use, so self-hosted tokens (no shard prefix) are
+# still redacted from logs. Set via remember_token() after resolution.
+_exact_token: str | None = None
+
 
 def clean_token(raw: str | None) -> str:
     """Undo the damage a paste does to an API token.
@@ -99,7 +103,15 @@ def token_shard(token: str) -> str | None:
     return match.group(1) if match else None
 
 
+def remember_token(token: str | None) -> None:
+    """Remember the live token so redact() can strip it even without a shard prefix."""
+    global _exact_token
+    _exact_token = token or None
+
+
 def redact(text: str) -> str:
+    if _exact_token and _exact_token in text:
+        text = text.replace(_exact_token, "<redacted-token>")
     return TOKEN_PATTERN.sub("<redacted-token>", text)
 
 

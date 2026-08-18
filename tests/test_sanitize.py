@@ -75,3 +75,27 @@ def test_collision_detection_is_case_insensitive():
     taken: set[str] = set()
     unique_component("Notes.pdf", 1, taken)
     assert unique_component("notes.pdf", 2, taken) == "notes-2.pdf"
+
+
+@pytest.mark.parametrize(
+    "raw,forbidden",
+    [
+        ("..", ".."),
+        ("../secret", "/"),
+        ("..\\secret", "\\"),
+        ("a\x00b", "\x00"),
+        ("a\u2215b", "\u2215"),
+        ("a\uff0fb", "\uff0f"),
+    ],
+)
+def test_path_traversal_inputs_cannot_escape_a_component(raw, forbidden):
+    result = safe_component(raw)
+    assert forbidden not in result
+    assert result not in {".", "..", ""}
+    assert "/" not in result and "\\" not in result
+
+
+def test_percent_encoded_dots_stay_literal():
+    """%2e%2e is not a parent directory until something decodes it; we must not."""
+    assert safe_component("%2e%2e") == "%2e%2e"
+    assert safe_component("%2e%2e%2fsecret") == "%2e%2e%2fsecret"

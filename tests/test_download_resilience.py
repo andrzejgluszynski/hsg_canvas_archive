@@ -175,3 +175,70 @@ async def test_pagination_loop_is_broken(client):
     got = [item async for item in client.paginate("loop")]
     assert got == [{"id": 1}]
     await client.aclose()
+
+
+@respx.mock
+async def test_off_host_pagination_is_not_followed(client):
+    evil = "https://evil.example/steal"
+    respx.get(url__startswith=f"{BASE}/api/v1/things").mock(
+        return_value=httpx.Response(
+            200,
+            json=[{"id": 1}],
+            headers={"Link": f'<{evil}>; rel="next"'},
+        )
+    )
+    route = respx.get(evil).mock(return_value=httpx.Response(200, json=[{"id": 99}]))
+    got = [item async for item in client.paginate("things")]
+    assert [i["id"] for i in got] == [1]
+    assert route.call_count == 0
+    await client.aclose()
+
+
+@respx.mock
+async def test_non_list_payload_is_not_treated_as_items(client, caplog):
+    import logging
+
+    respx.get(url__startswith=f"{BASE}/api/v1/weird").mock(
+        return_value=httpx.Response(200, json={"id": 1, "name": "nope"})
+    )
+    with caplog.at_level(logging.WARNING):
+        got = [item async for item in client.paginate("weird")]
+    assert got == []
+    assert "JSON list" in caplog.text
+    await client.aclose()
+
+
+@respx.mock
+async def test_collect_empty_list_is_not_none(client):
+    respx.get(url__startswith=f"{BASE}/api/v1/courses/1/files").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    assert await client.collect("courses/1/files") == []
+    await client.aclose()
+
+
+@respx.mock
+async def test_collect_denied_is_none(client):
+    respx.get(url__startswith=f"{BASE}/api/v1/courses/1/files").mock(
+        return_value=httpx.Response(403)
+    )
+    assert await client.collect("courses/1/files") is None
+    await client.aclose()
+
+
+async def test_mutating_request_raises_read_only(client):
+    from canvas_archive.http.client import ReadOnlyViolation
+
+    with pytest.raises(ReadOnlyViolation):
+        await client._request(client._api_client, f"{BASE}/api/v1/x", method="POST")
+    await client.aclose()
+
+
+@respx.mock
+async def test_file_client_refuses_private_ip_redirect(client, tmp_path):
+    respx.get(FILE_URL).mock(
+        return_value=httpx.Response(302, headers={"Location": "http://169.254.169.254/latest"})
+    )
+    with pytest.raises(RuntimeError, match="private address|failed after"):
+        await client.download(FILE_URL, tmp_path / "doc.pdf")
+    await client.aclose()

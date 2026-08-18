@@ -8,8 +8,8 @@ from canvas_archive.render.html import build_site, markdown_to_html, page
 @pytest.mark.parametrize(
     "md,expected",
     [
-        ("# Title", "<h1>Title</h1>"),
-        ("### Deep", "<h3>Deep</h3>"),
+        ("# Title", '<h1 id="title">Title</h1>'),
+        ("### Deep", '<h3 id="deep">Deep</h3>'),
         ("plain text", "<p>plain text</p>"),
         ("**bold**", "<p><strong>bold</strong></p>"),
         ("*slant*", "<p><em>slant</em></p>"),
@@ -208,12 +208,14 @@ def test_pages_are_fully_self_contained(tmp_path):
     build_site(tmp_path)
 
     for html_file in tmp_path.rglob("*.html"):
+        if html_file.name == "search.html":
+            continue
         text = html_file.read_text()
         assert "http://" not in text
         assert "https://" not in text
         assert "@import" not in text
         assert "<link" not in text  # no external stylesheet
-        assert "<script" not in text  # no JS at all
+        assert "<script" not in text  # no JS except on the search page
 
 
 def test_icons_referenced_are_actually_defined(tmp_path):
@@ -285,7 +287,8 @@ def test_external_links_get_noreferrer():
 
 def test_markdown_document_links_open_in_a_new_tab():
     out = markdown_to_html("[Slides](../files/Slides.pdf) then [Grades](./grades.html)")
-    assert '<a href="../files/Slides.pdf" target="_blank" rel="noopener">' in out
+    # PDFs stay in the archive via the in-page viewer; other pages stay in-tab too.
+    assert '<a href="../files/Slides.view.html">' in out
     assert '<a href="./grades.html">' in out
 
 
@@ -415,8 +418,8 @@ def test_percentage_only_grade_uses_the_percentage():
 
     from canvas_archive.render.html import grade_cell
 
-    out = grade_cell("100.0%")
-    assert re.search(r"width:100\.0%", out)
+    out = grade_cell("88.5%")
+    assert re.search(r"width:88\.5%", out)
     assert "g-pct" not in out  # no redundant second number
 
 
@@ -518,3 +521,203 @@ def test_section_card_links_to_the_section_page_not_an_arbitrary_one(tmp_path):
     index = (course / "index.html").read_text()
     assert "pages/pages.html" in index
     assert "Aardvark.html" not in index
+
+
+def test_rebuild_lists_one_row_per_pdf_through_the_viewer(tmp_path):
+    """A leftover .view.html must not become its own listing row on the next build."""
+    (tmp_path / "README.md").write_text("# A\n")
+    course = tmp_path / "courses" / "C__1"
+    files = course / "files"
+    files.mkdir(parents=True)
+    (course / "README.md").write_text("# C\n")
+    (files / "Syllabus.pdf").write_bytes(b"%PDF")
+    build_site(tmp_path)
+    build_site(tmp_path)
+
+    html = (files / "index.html").read_text()
+    assert html.count("Syllabus.pdf") == 1
+    assert 'href="./Syllabus.view.html"' in html
+    assert "Syllabus.view.html" not in html.split("<tbody>", 1)[-1].replace(
+        'href="./Syllabus.view.html"', ""
+    )
+
+
+def test_nested_folder_item_count_ignores_viewers(tmp_path):
+    (tmp_path / "README.md").write_text("# A\n")
+    course = tmp_path / "courses" / "C__1"
+    nested = course / "files" / "week1"
+    nested.mkdir(parents=True)
+    (course / "README.md").write_text("# C\n")
+    (nested / "notes.pdf").write_bytes(b"x")
+    build_site(tmp_path)
+    parent = (course / "files" / "index.html").read_text()
+    assert "1 item" in parent
+    assert "2 items" not in parent
+
+
+def test_course_index_has_cards_not_a_folder_inventory(tmp_path):
+    (tmp_path / "README.md").write_text("# A\n")
+    course = tmp_path / "courses" / "C__1"
+    (course / "files").mkdir(parents=True)
+    (course / "README.md").write_text("# C\n\n**Code:** X\n")
+    (course / "files" / "a.pdf").write_bytes(b"x")
+    build_site(tmp_path)
+    html = (course / "index.html").read_text()
+    assert 'class="cards"' in html
+    assert "What's in this folder" not in html
+
+
+def test_pages_html_is_a_toc_not_a_body_dump(tmp_path):
+    (tmp_path / "README.md").write_text("# A\n")
+    course = tmp_path / "courses" / "C__1"
+    pages = course / "pages"
+    pages.mkdir(parents=True)
+    (course / "README.md").write_text("# C\n")
+    (pages / "Intro.md").write_text("# Intro\n\nThe full lecture body lives here.\n")
+    (pages / "pages.md").write_text(
+        "# Pages\n\n| Page | Updated |\n|---|---|\n| [Intro](./Intro.md) | — |\n"
+    )
+    build_site(tmp_path)
+    toc = (pages / "pages.html").read_text()
+    assert "Intro.html" in toc
+    assert "The full lecture body lives here." not in toc
+    assert "The full lecture body lives here." in (pages / "Intro.html").read_text()
+
+
+def test_grades_assignment_href_matches_submission_leaf(tmp_path):
+    (tmp_path / "README.md").write_text("# A\n")
+    course = tmp_path / "courses" / "C__1"
+    (course / "grades").mkdir(parents=True)
+    (course / "submissions" / "Essay").mkdir(parents=True)
+    (course / "README.md").write_text("# C\n")
+    (course / "submissions" / "Essay" / "README.md").write_text("# Essay\n\nMy work.\n")
+    (course / "grades" / "grades.md").write_text(
+        "# Grades\n\n| Assignment | Score |\n|---|---|\n"
+        "| [Essay](../submissions/Essay/README.md) | 18 |\n"
+    )
+    build_site(tmp_path)
+    grades = (course / "grades" / "grades.html").read_text()
+    assert 'href="../submissions/Essay/index.html"' in grades
+
+
+def test_markdown_pdf_links_stay_on_the_real_file_on_disk(tmp_path):
+    """The HTML rewrite is HTML-only; Obsidian still opens the PDF."""
+    (tmp_path / "README.md").write_text("# A\n")
+    course = tmp_path / "courses" / "C__1"
+    (course / "files").mkdir(parents=True)
+    (course / "README.md").write_text("# C\n\n[essay](./files/essay.pdf)\n")
+    (course / "files" / "essay.pdf").write_bytes(b"x")
+    build_site(tmp_path)
+    assert "./files/essay.pdf" in (course / "README.md").read_text()
+    assert "essay.view.html" in (course / "index.html").read_text()
+
+
+def test_md_rewrite_keeps_spaces_and_dots_in_filenames(tmp_path):
+    (tmp_path / "README.md").write_text("# A\n")
+    course = tmp_path / "courses" / "C__1"
+    (course / "pages").mkdir(parents=True)
+    (course / "README.md").write_text("# C\n\n[p](./pages/Week 1.notes.md)\n")
+    (course / "pages" / "Week 1.notes.md").write_text("# Notes\n")
+    build_site(tmp_path)
+    assert 'href="./pages/Week 1.notes.html"' in (course / "index.html").read_text()
+
+
+def test_submission_pdf_gets_a_viewer(tmp_path):
+    (tmp_path / "README.md").write_text("# A\n")
+    course = tmp_path / "courses" / "C__1"
+    sub = course / "submissions" / "Essay"
+    sub.mkdir(parents=True)
+    (course / "README.md").write_text("# C\n")
+    (sub / "README.md").write_text("# Essay\n\n[file](./essay.pdf)\n")
+    (sub / "essay.pdf").write_bytes(b"%PDF")
+    build_site(tmp_path)
+    assert (sub / "essay.view.html").exists()
+    leaf = (sub / "index.html").read_text()
+    assert "essay.view.html" in leaf
+    assert "open directly" not in leaf  # that lives on the viewer, not the listing
+
+
+def test_pass_grade_cell_has_no_bar():
+    from canvas_archive.render.html import grade_cell
+
+    out = grade_cell("Pass")
+    assert "g-track" not in out
+    assert "Pass" in out
+
+
+def test_swiss_grade_cell_still_has_a_bar():
+    from canvas_archive.render.html import grade_cell
+
+    out = grade_cell("5.25 / 78.45%")
+    assert "g-track" in out
+    assert "5.25" in out
+
+
+def test_root_index_shows_pass_fail_not_a_hundred_percent_bar(tmp_path):
+    (tmp_path / "README.md").write_text(
+        "# Archive\n\n| Course | Grade |\n|---|---|\n| [C](./courses/C__1/README.md) | Pass |\n"
+    )
+    course = tmp_path / "courses" / "C__1"
+    course.mkdir(parents=True)
+    (course / "README.md").write_text("# C\n")
+    build_site(tmp_path)
+    html = (tmp_path / "index.html").read_text()
+    assert "Pass" in html
+    assert "g-track" not in html.split("</style>", 1)[-1]
+
+
+def test_page_has_csp_skip_link_and_main():
+    from canvas_archive.render.html import _CSP, page
+
+    html = page("T", "<p>x</p>")
+    assert f'content="{_CSP}"' in html
+    assert "object-src 'self'" in html
+    assert 'href="#main"' in html
+    assert '<main id="main">' in html
+    assert 'aria-label="Breadcrumb"' in page("T", "<p>x</p>", crumbs="Home")
+    assert "<script" not in html
+
+
+def test_search_page_is_the_only_page_with_a_script(tmp_path):
+    (tmp_path / "README.md").write_text("# A\n")
+    course = tmp_path / "courses" / "C__1"
+    course.mkdir(parents=True)
+    (course / "README.md").write_text("# C\n")
+    build_site(tmp_path)
+    with_script = [p for p in tmp_path.rglob("*.html") if "<script" in p.read_text()]
+    assert [p.name for p in with_script] == ["search.html"]
+    search = (tmp_path / "search.html").read_text()
+    assert "script-src 'unsafe-inline'" in search
+    assert "object-src 'self'" in search
+
+
+def test_javascript_and_data_urls_are_not_links():
+    from canvas_archive.render.html import markdown_to_html
+
+    for target in (
+        "javascript:alert(1)",
+        "data:text/html,x",
+        "vbscript:msgbox(1)",
+        "%6aavascript:alert(1)",
+    ):
+        out = markdown_to_html(f"[x]({target})")
+        assert "<a " not in out
+        assert "javascript:" not in out.lower() or "alert" not in out
+
+
+def test_attribute_breakout_in_href_is_escaped():
+    from canvas_archive.render.html import markdown_to_html
+
+    out = markdown_to_html('[x](https://example.com/" onclick="alert(1))')
+    assert 'onclick="alert' not in out
+    assert "&quot;" in out
+
+
+def test_focus_print_and_reduced_motion_are_defined():
+    from canvas_archive.render.html import CSS
+
+    assert ":focus-visible" in CSS
+    assert "@media print" in CSS
+    assert "prefers-reduced-motion" in CSS
+    assert "page-break-inside:avoid" in CSS
+    assert "html:has(#theme-light:checked)" in CSS

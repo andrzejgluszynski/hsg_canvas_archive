@@ -15,6 +15,7 @@ import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+from html import unescape
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -31,7 +32,7 @@ log = logging.getLogger(__name__)
 # download the file without logging in. They appear not just in file metadata but
 # inline in announcement bodies, page bodies and assignment descriptions, so the scrub
 # has to walk everything we persist -- someone will eventually share this folder.
-_VERIFIER = re.compile(r"(?:&amp;|[?&])verifier=[A-Za-z0-9._~-]+", re.I)
+_VERIFIER = re.compile(r"(?:&amp;|[?&#])verifier=[A-Za-z0-9._~-]+", re.I)
 
 
 # Canvas text refers to course files by URL, as embedded images and as ordinary
@@ -68,9 +69,12 @@ def strip_verifier(text: str | None) -> str | None:
     """Remove verifier capability tokens from a URL or from HTML containing URLs."""
     if not text:
         return text
-    cleaned = _VERIFIER.sub("", text)
+    cleaned = unescape(text)
+    # Percent-encoded "verifier" (e.g. %76erifier=) is still a capability token.
+    cleaned = re.sub(r"%76erifier=", "verifier=", cleaned, flags=re.I)
+    cleaned = _VERIFIER.sub("", cleaned)
     # A URL whose only parameter was the verifier is left with a dangling separator.
-    return re.sub(r"[?&]$", "", cleaned)
+    return re.sub(r"[?&#]$", "", cleaned)
 
 
 def scrub(value: Any) -> Any:
@@ -84,24 +88,24 @@ def scrub(value: Any) -> Any:
     return value
 
 
+def _atomic_write(path: Path, text: str) -> None:
+    parent = fs_path(path.parent)
+    parent.mkdir(parents=True, exist_ok=True)
+    dest = fs_path(path)
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, dest)
+
+
 def write_json(path: Path, payload: Any) -> None:
-    fs_path(path.parent).mkdir(parents=True, exist_ok=True)
-    fs_path(path).write_text(
-        json.dumps(scrub(payload), indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-
-
-def write_html(path: Path, body: str) -> None:
-    fs_path(path.parent).mkdir(parents=True, exist_ok=True)
-    fs_path(path).write_text(strip_verifier(body) or "", encoding="utf-8")
+    _atomic_write(path, json.dumps(scrub(payload), indent=2, ensure_ascii=False))
 
 
 def write_md(path: Path, text: str) -> None:
     """Readable companion to the JSON. Never the source of truth, always the front door."""
     if not text or not text.strip():
         return
-    fs_path(path.parent).mkdir(parents=True, exist_ok=True)
-    fs_path(path).write_text(strip_verifier(text) or "", encoding="utf-8")
+    _atomic_write(path, strip_verifier(text) or "")
 
 
 @dataclass
@@ -167,6 +171,7 @@ class Archiver:
         # link to it. Populated as files and pages are archived.
         self._file_links: dict[int, dict] = {}
         self._page_links: dict[int, dict] = {}
+        self._submission_links: dict[int, dict] = {}
         self.content = content or {
             "files",
             "pages",
@@ -183,10 +188,10 @@ class Archiver:
     def want(self, key: str) -> bool:
         return key in self.content
 
-    async def run(self, course_filter: set[int] | None = None) -> Stats:
+    async def run(self, course_filter: set[int] | None = None, user: dict | None = None) -> Stats:
         self.out.mkdir(parents=True, exist_ok=True)
 
-        user = await self.client.get("users/self")
+        user = user or await self.client.get("users/self")
         write_json(self.out / "user" / "profile.json", user)
         log.info("signed in as %s (id %s)", user.get("name"), user.get("id"))
 
@@ -208,12 +213,18 @@ class Archiver:
                 "courses", enrollment_state=state, **{"include[]": ["term", "syllabus_body"]}
             ):
                 cid = course.get("id")
-                if cid and cid not in seen and course.get("name"):
+                if cid and cid not in seen:
+                    if not course.get("name"):
+                        course = {**course, "name": f"course-{cid}"}
+                        log.warning("course %s has no name, using %s", cid, course["name"])
                     seen.add(cid)
                     courses.append(course)
 
         if course_filter:
+            available = ", ".join(str(c["id"]) for c in courses) or "none"
             courses = [c for c in courses if c["id"] in course_filter]
+            if not courses:
+                raise SystemExit(f"No matching courses for --course. Available ids: {available}")
 
         log.info("archiving %d courses", len(courses))
         if self.progress:
@@ -309,16 +320,15 @@ class Archiver:
 
         write_json(cdir / "course.json", course)
 
-        if self.want("syllabus") and course.get("syllabus_body"):
-            write_html(cdir / "syllabus.html", course["syllabus_body"])
-
         if self.want("grades") and grades:
             write_json(cdir / "grades" / "grades.json", grades)
             self.stats.json_records["grades"] += 1
 
         self._note(handle, "modules")
         try:
-            modules = await self.archive_modules(cid, cdir, counts)
+            modules = await self.archive_modules(
+                cid, cdir, counts, course_name=course.get("name") or ""
+            )
         except Exception as exc:
             # Modules are the backbone of the traversal, but losing them must not cost
             # the course its grades, submissions and announcements too.
@@ -326,17 +336,18 @@ class Archiver:
             self.stats.errors.append(f"course {cid} modules: {exc}")
             modules = []
 
+        assignment_items: list[dict] = []
+
         async def simple(key: str, path: str, params: dict) -> int:
             items = [i async for i in self.client.paginate(f"courses/{cid}/{path}", **params)]
             if not items:
                 return 0
             write_json(cdir / key / f"{key}.json", items)
             self.stats.json_records[key] += len(items)
-            renderer = {
-                "assignments": md.assignments_md,
-                "announcements": md.announcements_md,
-            }[key]
-            write_md(cdir / key / f"{key}.md", renderer(course.get("name") or "", items))
+            if key == "assignments":
+                assignment_items.extend(items)
+                return len(items)
+            write_md(cdir / key / f"{key}.md", md.announcements_md(course.get("name") or "", items))
             return len(items)
 
         # Each exporter is isolated: a course must not lose its files because its
@@ -370,9 +381,25 @@ class Archiver:
             step("files", lambda: self.archive_files(cid, cdir, modules, handle)),
         )
 
+        links = self._submission_links.get(cid, {})
+        if assignment_items:
+            write_md(
+                cdir / "assignments" / "assignments.md",
+                md.assignments_md(
+                    course.get("name") or "", assignment_items, submission_links=links
+                ),
+            )
+
         if modules and self.want("modules"):
             # Written now, not earlier: it links to files and pages that only exist
             # once their exporters have run.
+            sections = {}
+            if (cdir / "assignments" / "assignments.md").exists():
+                sections["assignments"] = "../assignments/assignments.md"
+            if (cdir / "quizzes" / "quizzes.md").exists():
+                sections["quizzes"] = "../quizzes/quizzes.md"
+            if (cdir / "discussions" / "discussions.md").exists():
+                sections["discussions"] = "../discussions/discussions.md"
             write_md(
                 cdir / "modules" / "modules.md",
                 md.modules_md(
@@ -380,16 +407,22 @@ class Archiver:
                     modules,
                     file_links={k: f"../{v}" for k, v in self._file_links.get(cid, {}).items()},
                     page_links={k: f"../{v}" for k, v in self._page_links.get(cid, {}).items()},
+                    section_links=sections,
                 ),
             )
 
         if self.want("grades") and grades:
             write_md(
                 cdir / "grades" / "grades.md",
-                md.grades_md(course.get("name") or "", grades, self._graded.get(cid, [])),
+                md.grades_md(
+                    course.get("name") or "",
+                    grades,
+                    self._graded.get(cid, []),
+                    submission_links=links,
+                ),
             )
 
-        write_md(cdir / "README.md", md.course_overview(course, grades, counts))
+        write_md(cdir / "README.md", md.course_overview(course, grades))
 
         # Last, so it can rewrite every Markdown file this course produced.
         self._note(handle, "linked files")
@@ -417,13 +450,14 @@ class Archiver:
         # url -> (course_id, file_id, is_image)  -- may legitimately be empty; the
         # navigation rewrite below still has work to do.
         wanted: dict[str, tuple[int, int, bool]] = {}
-        for path in md_files:
-            text = fs_path(path).read_text(encoding="utf-8", errors="ignore")
-            for bang, _label, url, course_id, file_id in _FILE_REF.findall(text):
-                # If the same file is ever embedded, treat it as an image: it has to
-                # render inline, and a document copy would be redundant.
-                is_image = bool(bang) or wanted.get(url, (0, 0, False))[2]
-                wanted[url] = (int(course_id), int(file_id), is_image)
+        if self.want("files"):
+            for path in md_files:
+                text = fs_path(path).read_text(encoding="utf-8", errors="ignore")
+                for bang, _label, url, course_id, file_id in _FILE_REF.findall(text):
+                    # If the same file is ever embedded, treat it as an image: it has to
+                    # render inline, and a document copy would be redundant.
+                    is_image = bool(bang) or wanted.get(url, (0, 0, False))[2]
+                    wanted[url] = (int(course_id), int(file_id), is_image)
 
         local: dict[str, Path] = {}
         taken_media: set[str] = set()
@@ -462,7 +496,7 @@ class Archiver:
         if added:
             index = cdir / "files" / "files.json"
             existing: list = []
-            if index.exists():
+            if fs_path(index).exists():
                 try:
                     existing = json.loads(fs_path(index).read_text(encoding="utf-8"))
                 except (ValueError, OSError):
@@ -501,7 +535,7 @@ class Archiver:
                 if not rel:
                     return match.group(0)
                 target = cdir / rel
-            if not target.exists():
+            if not fs_path(target).exists():
                 return match.group(0)  # nothing local to point at; leave the URL alone
             local = as_url_path(os.path.relpath(target, path.parent))
             return f"[{label}]({quote(local)})"
@@ -667,16 +701,11 @@ class Archiver:
 
         write_json(base / "submission.json", submission)
         write_md(base / "README.md", md.submission_md(submission))
+        aid = submission.get("assignment_id") or assignment.get("id")
+        self._submission_links.setdefault(cid, {})[aid] = f"submissions/{folder}"
 
-        # A text-entry submission is the actual work; it exists only as HTML.
-        if submission.get("body"):
-            write_html(base / "submission.html", submission["body"])
-
-        # Instructor feedback, saved plainly so it is readable without digging
-        # through JSON. This is the part people most want back years later.
         await self._save_submission_attachments(base, submission)
 
-        # Earlier attempts, kept separately so the latest stays at the top level.
         history = submission.get("submission_history") or []
         for older in history:
             if older.get("attempt") in (None, submission.get("attempt")):
@@ -685,8 +714,7 @@ class Archiver:
                 continue
             sub = base / f"attempt-{older['attempt']}"
             sub.mkdir(parents=True, exist_ok=True)
-            if older.get("body"):
-                write_html(sub / "submission.html", older["body"])
+            write_md(sub / "README.md", md.submission_md(older))
             await self._save_submission_attachments(sub, older)
 
     async def _save_submission_attachments(self, base: Path, submission: dict) -> None:
@@ -712,7 +740,9 @@ class Archiver:
                 self.stats.submission_bytes += result.bytes_written
             self.stats.submission_files += 1
 
-    async def archive_modules(self, cid: int, cdir: Path, counts: dict) -> list[dict]:
+    async def archive_modules(
+        self, cid: int, cdir: Path, counts: dict, *, course_name: str = ""
+    ) -> list[dict]:
         modules = [
             m
             async for m in self.client.paginate(f"courses/{cid}/modules", **{"include[]": "items"})
@@ -727,10 +757,12 @@ class Archiver:
             counts["modules"] = len(modules)
 
         if self.want("pages"):
-            counts["pages"] = await self.archive_pages(cid, cdir, modules)
+            counts["pages"] = await self.archive_pages(cid, cdir, modules, course_name=course_name)
         return modules
 
-    async def archive_pages(self, cid: int, cdir: Path, modules: list[dict]) -> int:
+    async def archive_pages(
+        self, cid: int, cdir: Path, modules: list[dict], *, course_name: str = ""
+    ) -> int:
         """Fetch pages named by module items.
 
         The /pages *index* is often disabled (404) while individual pages resolve, so
@@ -747,25 +779,26 @@ class Archiver:
 
         taken: set[str] = set()
         records = []
+        toc_links: dict[str, str] = {}
         for slug in dict.fromkeys(slugs):
             page = await self.client.get_optional(f"courses/{cid}/pages/{slug}")
             if not page:
                 self.stats.skipped["page not accessible"] += 1
                 continue
             records.append(page)
-            body = page.get("body")
-            if body:
-                name = unique_component(
-                    safe_component(page.get("title") or slug) + ".html", slug, taken
-                )
-                write_html(cdir / "pages" / name, body)
-                self._page_links.setdefault(cid, {})[slug] = f"pages/{name}"
-
+            name = unique_component(safe_component(page.get("title") or slug) + ".md", slug, taken)
+            write_md(cdir / "pages" / name, md.page_md(page))
+            self._page_links.setdefault(cid, {})[slug] = f"pages/{name}"
+            toc_links[page.get("url") or slug] = name
+            toc_links[slug] = name
             self.stats.pages += 1
 
         if records:
             write_json(cdir / "pages" / "pages.json", records)
-            write_md(cdir / "pages" / "pages.md", md.pages_md("", records))
+            write_md(
+                cdir / "pages" / "pages.md",
+                md.pages_md(course_name, records, links=toc_links),
+            )
         return len(records)
 
     async def archive_files(
@@ -778,9 +811,10 @@ class Archiver:
                 if item.get("type") == "File" and item.get("content_id"):
                     file_ids.append(item["content_id"])
 
-        index_files = [f async for f in self.client.paginate(f"courses/{cid}/files")]
-        if not index_files:
+        index_files = await self.client.collect(f"courses/{cid}/files")
+        if index_files is None:
             self.stats.skipped["/files index denied"] += 1
+            index_files = []
 
         by_id: dict[int, dict] = {f["id"]: f for f in index_files if f.get("id")}
         missing = [fid for fid in dict.fromkeys(file_ids) if fid not in by_id]
@@ -857,9 +891,7 @@ class Archiver:
     async def retry_failed(self) -> None:
         """Calm second pass over everything that failed.
 
-        Concurrency is forced to 1: most first-pass failures are throttling, and the
-        fix for throttling is to stop being in a hurry. Partial files are preserved,
-        so a retry resumes rather than restarts.
+        Partial files are preserved, so a retry resumes rather than restarts.
         """
         if not self._failed:
             return
@@ -869,11 +901,6 @@ class Archiver:
         if self.progress:
             self.progress.start_retry(len(pending))
 
-        original = self.client.throttle.max_concurrency
-        self.client.throttle.max_concurrency = 1
-        try:
-            for cid, cdir, meta, name in pending:
-                if await self._fetch_one(cid, cdir, meta, name, first_pass=False):
-                    self.stats.recovered += 1
-        finally:
-            self.client.throttle.max_concurrency = original
+        for cid, cdir, meta, name in pending:
+            if await self._fetch_one(cid, cdir, meta, name, first_pass=False):
+                self.stats.recovered += 1

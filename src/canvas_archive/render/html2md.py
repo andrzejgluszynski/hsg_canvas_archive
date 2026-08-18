@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from html import unescape
 from html.parser import HTMLParser
+from urllib.parse import unquote
 
 _BLOCK = {
     "p",
@@ -37,6 +38,26 @@ _BLOCK = {
     "hr",
 }
 _SKIP_CONTENT = {"script", "style", "head", "meta", "link"}
+
+
+def _safe_href(url: str | None) -> str | None:
+    """Allow relative, http(s) and mailto. Reject javascript:/data:/vbscript:."""
+    if not url or not str(url).strip():
+        return None
+    raw = str(url).strip()
+    decoded = unescape(raw)
+    for _ in range(3):
+        nxt = unquote(decoded)
+        if nxt == decoded:
+            break
+        decoded = nxt
+    lower = decoded.lower().strip()
+    if lower.startswith(("javascript:", "data:", "vbscript:")):
+        return None
+    path = lower.split("?")[0].split("#")[0]
+    if ":" in path and not lower.startswith(("http://", "https://", "mailto:")):
+        return None
+    return raw
 
 
 class _Converter(HTMLParser):
@@ -112,18 +133,20 @@ class _Converter(HTMLParser):
         elif tag == "pre":
             self._newline(2), self.out.append("```\n"), setattr(self, "_in_pre", True)
         elif tag == "a":
-            self._href = attr.get("href")
+            self._href = _safe_href(attr.get("href"))
             self._link_text = []
         elif tag == "img":
             alt = attr.get("alt") or "image"
-            src = attr.get("src") or ""
+            src = _safe_href(attr.get("src") or "") or ""
             self._emit(f"![{alt}]({src})")
-        elif tag == "iframe":
-            src = attr.get("src") or ""
+        elif tag in ("iframe", "video"):
+            src = _safe_href(attr.get("src") or "") or ""
             title = attr.get("title") or "embedded video"
+            self._newline(2)
             if src:
-                self._newline(2)
-                self._emit(f"[{title}]({src})")
+                self._emit(f"*Embedded video (not saved offline):* [{title}]({src})")
+            else:
+                self._emit("*Embedded video (not saved offline).*")
         elif tag == "table":
             self._table_rows = []
             self._header_done = False

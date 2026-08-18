@@ -5,6 +5,7 @@ from canvas_archive.auth import (
     looks_like_token,
     normalize_base_url,
     redact,
+    remember_token,
     token_shard,
 )
 
@@ -80,3 +81,13 @@ def test_url_normalisation(raw):
 def test_redaction_covers_logs():
     assert TOKEN not in redact(f"GET /api?access_token={TOKEN} failed")
     assert TOKEN not in redact(f"Authorization: Bearer {TOKEN}")
+
+
+def test_self_hosted_token_is_redacted_once_remembered():
+    hosted = "abcdefghijklmnopqrstuvwxyz1234567890"
+    remember_token(hosted)
+    try:
+        assert hosted not in redact(f"Authorization: Bearer {hosted}")
+        assert "<redacted-token>" in redact(hosted)
+    finally:
+        remember_token(None)

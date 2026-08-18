@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -35,6 +37,27 @@ class DownloadResult:
     path: Path
     bytes_written: int
     skipped: bool = False
+
+
+def _is_blocked_ip_host(host: str | None) -> bool:
+    """True for RFC1918, link-local, and metadata addresses in a URL host."""
+    if not host:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_link_local
+
+
+async def _guard_file_request(request: httpx.Request) -> None:
+    """Refuse file-client redirects that land on private or metadata IPs."""
+    host = request.url.host
+    if _is_blocked_ip_host(host):
+        raise httpx.RequestError(
+            f"refusing connection to private address {host}",
+            request=request,
+        )
 
 
 def _is_rate_limited(response: httpx.Response) -> bool:
@@ -89,7 +112,10 @@ class CanvasClient:
         # Deliberately unauthenticated: Canvas file URLs carry their own `verifier`
         # capability token and redirect cross-host to S3/CloudFront, which reject or
         # mis-sign a stray Authorization header.
-        self._file_client = httpx.AsyncClient(**common)
+        self._file_client = httpx.AsyncClient(
+            **common,
+            event_hooks={"request": [_guard_file_request]},
+        )
 
     async def aclose(self) -> None:
         await self._api_client.aclose()
@@ -101,19 +127,36 @@ class CanvasClient:
     async def __aexit__(self, *exc: object) -> None:
         await self.aclose()
 
-    def _url(self, path: str) -> str:
-        if path.startswith("http"):
+    def _canvas_host(self) -> str:
+        return (urlparse(self.base_url).hostname or "").lower()
+
+    def _authenticated_url(self, path: str) -> str | None:
+        """Resolve a path or absolute URL. None if it is not our Canvas host over https."""
+        if path.startswith(("http://", "https://")):
+            parsed = urlparse(path)
+            host = (parsed.hostname or "").lower()
+            if parsed.scheme != "https" or host != self._canvas_host():
+                return None
             return path
         return f"{self.api}/{path.lstrip('/')}"
+
+    def _url(self, path: str) -> str:
+        url = self._authenticated_url(path)
+        if url is None:
+            raise ValueError(f"refusing off-host API request: {path}")
+        return url
 
     async def _request(
         self,
         client: httpx.AsyncClient,
         url: str,
         *,
+        method: str = "GET",
         params: Any = None,
         max_attempts: int | None = None,
     ) -> httpx.Response:
+        if method.upper() != "GET":
+            raise ReadOnlyViolation(f"refusing {method} {url}")
         max_attempts = max_attempts or self.retries
         for attempt in range(max_attempts):
             await self.throttle.acquire()
@@ -165,33 +208,51 @@ class CanvasClient:
         response.raise_for_status()
         return response.json()
 
-    async def paginate(self, path: str, **params: Any) -> AsyncIterator[dict]:
-        """Walk a collection via rel="next". Yields nothing if access is denied."""
+    async def collect(self, path: str, **params: Any) -> list[Any] | None:
+        """Return None if access is denied, otherwise the full list (possibly empty)."""
         params.setdefault("per_page", 100)
-        url: str | None = self._url(path)
+        url = self._authenticated_url(path)
+        if url is None:
+            log.warning("refusing off-host collection %s", path)
+            return None
         first = True
-        # A malformed or looping Link header would otherwise spin forever.
         seen: set[str] = set()
+        items: list[Any] = []
 
         while url:
             if url in seen:
                 log.warning("pagination loop detected at %s, stopping", path)
-                return
+                break
             seen.add(url)
             response = await self._request(self._api_client, url, params=params if first else None)
             if first and response.status_code in PERMISSION_STATUSES:
                 log.debug("skip collection %s -> HTTP %s", path, response.status_code)
-                return
+                return None
             response.raise_for_status()
 
             payload = response.json()
             if not isinstance(payload, list):
-                return
-            for item in payload:
-                yield item
+                log.warning("expected a JSON list from %s, got %s", path, type(payload).__name__)
+                break
+            items.extend(payload)
 
-            url = next_url(response.headers.get("link"))
+            nxt = next_url(response.headers.get("link"))
             first = False
+            if not nxt:
+                break
+            url = self._authenticated_url(nxt)
+            if url is None:
+                log.warning("off-host pagination next for %s, stopping", path)
+                break
+        return items
+
+    async def paginate(self, path: str, **params: Any) -> AsyncIterator[dict]:
+        """Walk a collection via rel="next". Yields nothing if access is denied."""
+        items = await self.collect(path, **params)
+        if items is None:
+            return
+        for item in items:
+            yield item
 
     async def download(
         self,
@@ -249,7 +310,7 @@ class CanvasClient:
                         # A server that ignored our Range restarts the file.
                         if resume_from and response.status_code != 206:
                             resume_from = 0
-                            part.unlink(missing_ok=True)
+                            fs_path(part).unlink(missing_ok=True)
 
                         response.raise_for_status()
                         mode = "ab" if resume_from else "wb"
@@ -261,7 +322,7 @@ class CanvasClient:
                 finally:
                     self.download_slots.release()
 
-            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
                 last_error = exc
                 await self.throttle.record_failure()
                 if attempt == self.retries - 1:

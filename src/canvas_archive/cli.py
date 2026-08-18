@@ -16,6 +16,7 @@ from .auth import (
     default_institution,
     normalize_base_url,
     redact,
+    remember_token,
     resolve_token,
     token_shard,
 )
@@ -73,14 +74,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=inst.base_url if inst else None,
         help=f"Canvas URL (default: {inst.base_url if inst else 'required'})",
     )
-    parser.add_argument("--token", help=f"API token (or set ${ENV_VAR})")
+    parser.add_argument(
+        "--token",
+        help=(
+            f"API token. Prefer ${ENV_VAR} or the setup wizard; "
+            "passing it here leaves it in shell history"
+        ),
+    )
     parser.add_argument(
         "--creds-file",
         type=Path,
         default=Path("creds.txt"),
         help="file containing the API token (default: creds.txt)",
     )
-    parser.add_argument("-o", "--output", type=Path, default=Path("output"))
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=Path.home() / "CanvasArchive",
+        help="output directory (default: ~/CanvasArchive)",
+    )
     parser.add_argument("--only", help=f"comma-separated subset of: {','.join(ALL_CONTENT)}")
     parser.add_argument("--skip", help="comma-separated content types to exclude")
     parser.add_argument(
@@ -120,6 +133,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("--version", action="version", version=__version__)
     return parser
+
+
+def harden_creds_file(path: Path) -> None:
+    """Warn and tighten a token file that is group- or world-readable."""
+    if not path.exists() or not path.is_file():
+        return
+    try:
+        mode = path.stat().st_mode
+    except OSError:
+        return
+    if mode & 0o077:
+        print(
+            f"  Warning: {path} is readable by others. Restricting permissions to 0600.",
+            file=sys.stderr,
+        )
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
 
 
 def resolve_content(only: str | None, skip: str | None) -> set[str]:
@@ -163,6 +195,9 @@ async def run(args: argparse.Namespace) -> int:
             f"  4. Then either:  export {ENV_VAR}=<token>   or   --token <token>\n"
         )
 
+    remember_token(token)
+    harden_creds_file(args.creds_file)
+
     content = resolve_content(args.only, args.skip)
     shard = token_shard(token)
 
@@ -204,7 +239,7 @@ async def run(args: argparse.Namespace) -> int:
                 build_html=not args.no_html,
                 course_workers=args.course_workers,
             )
-            stats = await archiver.run(set(args.course) if args.course else None)
+            stats = await archiver.run(set(args.course) if args.course else None, user=user)
 
     print_summary(stats, output.expanduser(), wizard_used, open_browser=not args.no_open)
     return 0

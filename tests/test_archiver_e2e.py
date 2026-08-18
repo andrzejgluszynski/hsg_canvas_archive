@@ -138,8 +138,11 @@ async def test_module_first_traversal_gets_content_despite_denied_indexes(client
     assert course_dir.name == "Strategy 101__STRAT__1"
 
     assert (course_dir / "files" / "Slides.pdf").read_bytes() == PDF
-    assert (course_dir / "pages" / "Intro.html").read_text() == "<h1>Hello</h1>"
-    assert (course_dir / "syllabus.html").exists()
+    intro = (course_dir / "pages" / "Intro.md").read_text()
+    assert "# Intro" in intro and "Hello" in intro
+    assert "<h1>Hello</h1>" not in intro
+    assert not (course_dir / "syllabus.html").exists()
+    assert "Read everything" in (course_dir / "README.md").read_text()
     assert (course_dir / "grades" / "grades.json").exists()
 
     assert stats.files_downloaded == 1
@@ -199,6 +202,9 @@ async def test_rerun_skips_completed_files(client, tmp_path):
         ("body with &amp;verifier=tok123 escaped", "body with  escaped"),
         ("no token here", "no token here"),
         ("", ""),
+        ("https://x/files/1#verifier=abc123", "https://x/files/1"),
+        ("https://x/files/1?%76erifier=abc123", "https://x/files/1"),
+        ("https://x/files/1?download=1&%76erifier=abc123", "https://x/files/1?download=1"),
     ],
 )
 def test_strip_verifier(raw, expected):
@@ -312,7 +318,9 @@ async def test_submission_without_attachments_is_not_dropped(client, tmp_path):
     stats = await Archiver(client, tmp_path).run()
 
     folder = next((tmp_path / "courses").iterdir()) / "submissions" / "Reflection"
-    assert (folder / "submission.html").read_text() == "<p>My typed answer</p>"
+    readme = (folder / "README.md").read_text()
+    assert "My typed answer" in readme
+    assert not (folder / "submission.html").exists()
     assert (folder / "submission.json").exists()
     assert stats.submissions == 1
     await client.aclose()
@@ -484,12 +492,12 @@ async def test_sideways_canvas_links_point_at_local_copies(client, tmp_path):
         ),
     )
     await Archiver(client, tmp_path, build_html=False).run()
-    pages_md = (next((tmp_path / "courses").iterdir()) / "pages" / "pages.md").read_text()
+    leaf = (next((tmp_path / "courses").iterdir()) / "pages" / "Intro.md").read_text()
 
-    assert "canvas.test/courses/1/modules/55" not in pages_md
-    assert "modules/modules.md" in pages_md.replace("%20", " ")
-    assert "assignments/assignments.md" in pages_md.replace("%20", " ")
-    assert "README.md" in pages_md
+    assert "canvas.test/courses/1/modules/55" not in leaf
+    assert "modules/modules.md" in leaf.replace("%20", " ")
+    assert "assignments/assignments.md" in leaf.replace("%20", " ")
+    assert "README.md" in leaf
     await client.aclose()
 
 
@@ -498,8 +506,8 @@ async def test_links_to_other_courses_are_left_alone(client, tmp_path):
     """We have no local copy of a course you aren't enrolled in; don't fake one."""
     _mount(page_body='<a href="https://canvas.test/courses/430/modules/9">Elsewhere</a>')
     await Archiver(client, tmp_path, build_html=False).run()
-    pages_md = (next((tmp_path / "courses").iterdir()) / "pages" / "pages.md").read_text()
-    assert "canvas.test/courses/430/modules/9" in pages_md
+    leaf = (next((tmp_path / "courses").iterdir()) / "pages" / "Intro.md").read_text()
+    assert "canvas.test/courses/430/modules/9" in leaf
     await client.aclose()
 
 
@@ -508,8 +516,8 @@ async def test_link_to_a_section_we_did_not_archive_is_left_alone(client, tmp_pa
     """--only pages means there is no discussions.md to point at."""
     _mount(page_body='<a href="https://canvas.test/courses/1/discussion_topics/3">Thread</a>')
     await Archiver(client, tmp_path, content={"pages", "modules"}, build_html=False).run()
-    pages_md = (next((tmp_path / "courses").iterdir()) / "pages" / "pages.md").read_text()
-    assert "canvas.test/courses/1/discussion_topics/3" in pages_md
+    leaf = (next((tmp_path / "courses").iterdir()) / "pages" / "Intro.md").read_text()
+    assert "canvas.test/courses/1/discussion_topics/3" in leaf
     await client.aclose()
 
 
@@ -540,6 +548,64 @@ async def test_bytes_are_counted_for_course_files(client, tmp_path):
     await Archiver(client, tmp_path, progress=rec, build_html=False).run()
     assert rec.total == len(PDF)
     assert rec.advanced == len(PDF)
+    await client.aclose()
+
+
+@respx.mock
+async def test_nameless_course_gets_a_fallback_folder(client, tmp_path):
+    _mount()
+    respx.get(url__startswith=f"{API}/courses?").mock(
+        side_effect=lambda request: httpx.Response(
+            200,
+            json=[{"id": 1, "course_code": "STRAT"}]
+            if "enrollment_state=active" in str(request.url)
+            else [],
+        )
+    )
+    await Archiver(client, tmp_path, build_html=False).run()
+    names = [p.name for p in (tmp_path / "courses").iterdir()]
+    assert names == ["course-1__STRAT__1"]
+    await client.aclose()
+
+
+@respx.mock
+async def test_course_filter_with_no_match_is_a_clear_error(client, tmp_path):
+    _mount()
+    with pytest.raises(SystemExit, match="No matching courses"):
+        await Archiver(client, tmp_path, build_html=False).run({99})
+    await client.aclose()
+
+
+@respx.mock
+async def test_skip_files_does_not_download_linked_files(client, tmp_path):
+    _mount(syllabus='<a href="https://canvas.test/courses/1/files/700">S.pdf</a>')
+    respx.get(f"{API}/courses/1/files/700").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": 700, "display_name": "S.pdf", "size": 9, "url": "https://files.test/700"},
+        )
+    )
+    respx.get(url__startswith="https://files.test/700").mock(
+        return_value=httpx.Response(200, content=b"SYLLABUS!")
+    )
+    stats = await Archiver(
+        client, tmp_path, content={"modules", "pages", "syllabus"}, build_html=False
+    ).run()
+    course = next((tmp_path / "courses").iterdir())
+    assert not (course / "files").exists()
+    assert stats.linked_files == 0
+    await client.aclose()
+
+
+@respx.mock
+async def test_empty_files_index_is_not_reported_as_denied(client, tmp_path):
+    _mount()
+    respx.get(url__startswith=f"{API}/courses/1/files?").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    stats = await Archiver(client, tmp_path, build_html=False).run()
+    assert "/files index denied" not in stats.skipped
+    assert stats.files_downloaded == 1  # still fetched from the module item
     await client.aclose()
 
 

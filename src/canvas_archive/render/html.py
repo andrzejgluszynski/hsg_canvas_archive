@@ -12,11 +12,14 @@ must still open in ten years from a USB stick.
 from __future__ import annotations
 
 import html as html_mod
+import json
 import re
 from pathlib import Path
 from urllib.parse import quote
 
 from ..paths import fs_path
+from .html2md import _safe_href
+from .markdown import heading_id
 
 CSS = """
 /* A small, deliberately modern design system. No webfonts and no icon library: the
@@ -92,6 +95,24 @@ a{
   border-bottom:1px solid transparent;transition:border-color .12s ease;
 }
 a:hover{border-bottom-color:var(--accent)}
+a:focus-visible,.card:focus-visible,button:focus-visible,input:focus-visible{
+  outline:2px solid var(--accent);outline-offset:2px
+}
+.skip{
+  position:absolute;left:-999px;top:0;background:var(--surface);color:var(--fg);
+  padding:.4rem .7rem;z-index:2
+}
+.skip:focus{left:1rem;top:1rem}
+.theme{
+  position:absolute;top:1rem;right:1.25rem;font-size:.75rem;color:var(--muted);
+  font-weight:500;cursor:pointer;user-select:none
+}
+.theme input{position:absolute;opacity:0;pointer-events:none}
+html:has(#theme-light:checked){
+  --bg:#fcfcfd;--surface:#fff;--fg:#0e1116;--muted:#656d7b;
+  --rule:#e7e9ee;--accent:#2f5cff;--accent-soft:#f0f3ff;
+  --shadow:0 1px 2px rgba(14,17,22,.04),0 1px 8px rgba(14,17,22,.03)
+}
 em{color:var(--muted);font-style:normal;font-size:.9375rem}
 strong{font-weight:620;color:var(--fg)}
 code{
@@ -139,6 +160,10 @@ table.files a{border-bottom:none;color:var(--fg);font-weight:480}
 table.files tr{transition:background .1s ease}
 table.files tr:hover td{background:var(--accent-soft)}
 table.files tr:hover td.k,table.files tr:hover a{color:var(--accent)}
+input.q{
+  width:100%;max-width:46rem;padding:.55rem .7rem;border:1px solid var(--rule);
+  border-radius:8px;background:var(--surface);color:var(--fg);font:inherit
+}
 
 /* --- section cards ----------------------------------------------------- */
 .cards{
@@ -190,6 +215,18 @@ footer a:hover{color:var(--accent)}
   h1{font-size:1.625rem}
   h2{font-size:1.0625rem;margin-top:2.25rem}
   .cards{grid-template-columns:1fr}
+  .theme{position:static;display:block;margin:0 0 1rem}
+}
+@media (prefers-reduced-motion:reduce){
+  .card,.card:hover{transition:none;transform:none}
+}
+@media print{
+  :root,html:has(#theme-light:checked){
+    --bg:#fff;--surface:#fff;--fg:#111;--muted:#444;--rule:#ccc;--accent:#000;--accent-soft:#f4f4f4;--shadow:none
+  }
+  nav.crumbs,footer,.theme,.skip{display:none}
+  .card,.tablewrap,blockquote,object.pdf{break-inside:avoid;page-break-inside:avoid}
+  body{background:#fff;color:#111}
 }
 """
 
@@ -269,6 +306,28 @@ _IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
 
 PAGE_SUFFIXES = {".html", ".htm", ""}
+_CSP = (
+    "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; "
+    "media-src 'self'; frame-src 'none'; object-src 'self'; base-uri 'none'"
+)
+_CSP_SEARCH = _CSP + "; script-src 'unsafe-inline'"
+
+
+def _safe_url(url: str) -> str | None:
+    """Allow relative, http(s) and mailto. Reject javascript:/data:/vbscript:."""
+    return _safe_href(url)
+
+
+def _to_viewer(url: str) -> str:
+    """Point HTML navigation at the in-page PDF viewer; leave Markdown sources alone."""
+    prefix, hash_part = (url.split("#", 1) + [""])[:2]
+    path, query = (prefix.split("?", 1) + [""])[:2]
+    if path.lower().endswith(".pdf"):
+        path = path[: -len(".pdf")] + ".view.html"
+        url = path + (("?" + query) if query else "")
+        if hash_part:
+            url += "#" + hash_part
+    return url
 
 
 def _link_attrs(target: str) -> str:
@@ -281,20 +340,32 @@ def _link_attrs(target: str) -> str:
         return ' target="_blank" rel="noopener noreferrer"'
     stem = target.split("?")[0].split("#")[0].rstrip("/")
     suffix = Path(stem).suffix.lower()
-    if suffix in PAGE_SUFFIXES:
+    if suffix in PAGE_SUFFIXES or stem.endswith(".view.html"):
         return ""
     return ' target="_blank" rel="noopener"'
 
 
 def _inline(text: str) -> str:
     out = html_mod.escape(text, quote=False)
-    out = _IMAGE.sub(
-        lambda m: f'<img alt="{m.group(1)}" src="{m.group(2)}" style="max-width:100%">', out
-    )
-    out = _LINK.sub(
-        lambda m: f'<a href="{m.group(2)}"{_link_attrs(m.group(2))}>{m.group(1) or m.group(2)}</a>',
-        out,
-    )
+
+    def image(match: re.Match) -> str:
+        alt = html_mod.escape(match.group(1), quote=True)
+        src = _safe_url(match.group(2))
+        if src is None:
+            return alt or "image"
+        src = html_mod.escape(_to_viewer(src), quote=True)
+        return f'<img alt="{alt}" src="{src}" style="max-width:100%">'
+
+    def link(match: re.Match) -> str:
+        label = match.group(1) or match.group(2)
+        href = _safe_url(match.group(2))
+        if href is None:
+            return label
+        href = _to_viewer(href)
+        return f'<a href="{html_mod.escape(href, quote=True)}"{_link_attrs(href)}>{label}</a>'
+
+    out = _IMAGE.sub(image, out)
+    out = _LINK.sub(link, out)
     for pattern, repl in _INLINE:
         out = pattern.sub(repl, out)
     return out
@@ -342,7 +413,9 @@ def markdown_to_html(text: str) -> str:
         if heading:
             close_lists()
             level = len(heading.group(1))
-            out.append(f"<h{level}>{_inline(heading.group(2))}</h{level}>")
+            title = heading.group(2)
+            ident = html_mod.escape(heading_id(title), quote=True)
+            out.append(f'<h{level} id="{ident}">{_inline(title)}</h{level}>')
             index += 1
             continue
 
@@ -485,7 +558,13 @@ _PLUMBING_SUFFIXES = {".json", ".md"}
 
 
 def _is_plumbing(entry: Path) -> bool:
-    return entry.is_file() and entry.suffix.lower() in _PLUMBING_SUFFIXES
+    """Hide archival sources and generated companions from folder listings."""
+    if not entry.is_file():
+        return False
+    name = entry.name.lower()
+    if name == "index.html" or name.endswith(".view.html"):
+        return True
+    return entry.suffix.lower() in _PLUMBING_SUFFIXES
 
 
 def _size(num: float) -> str:
@@ -537,8 +616,6 @@ def file_listing(directory: Path, *, title: str, depth: int, crumbs: str = "") -
     rows = []
     total = 0
     for entry in entries:
-        if entry.name == "index.html":
-            continue
         if entry.is_dir():
             target = f"{quote(entry.name)}/index.html"
             size = ""
@@ -623,25 +700,41 @@ def enhance_grades(html: str) -> str:
     return row.sub(lambda m: m.group(1) + grade_cell(m.group(2)) + m.group(3), html)
 
 
-def page(title: str, body_html: str, *, crumbs: str = "", depth: int = 0) -> str:
+def page(
+    title: str,
+    body_html: str,
+    *,
+    crumbs: str = "",
+    depth: int = 0,
+    csp: str | None = None,
+    extra_head: str = "",
+) -> str:
     """Wrap rendered content in the standalone page shell."""
     home = "../" * depth or "./"
-    nav = f'<nav class="crumbs">{crumbs}</nav>' if crumbs else ""
+    nav = f'<nav class="crumbs" aria-label="Breadcrumb">{crumbs}</nav>' if crumbs else ""
+    policy = csp or _CSP
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="{policy}">
 <title>{html_mod.escape(title)}</title>
 <style>{CSS}</style>
+{extra_head}
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
+<label class="theme"><input type="checkbox" id="theme-light"> Light</label>
 {ICON_SPRITE}
 <div class="wrap">
 {nav}
+<main id="main">
 {body_html}
+</main>
 <footer>{icon("archive", "ico-sm")} Archived from Canvas ·
-<a href="{home}index.html">All courses</a></footer>
+<a href="{home}index.html">All courses</a> ·
+<a href="{home}search.html">Search</a></footer>
 </div>
 </body>
 </html>
@@ -651,9 +744,115 @@ def page(title: str, body_html: str, *, crumbs: str = "", depth: int = 0) -> str
 def md_file_to_html(md_path: Path, *, title: str, crumbs: str, depth: int) -> str:
     text = fs_path(md_path).read_text(encoding="utf-8")
     # Point cross-links at the generated HTML rather than the Markdown source.
-    text = re.sub(r"\]\((\.[^)]*?)README\.md\)", r"](\1index.html)", text)
-    text = re.sub(r"\]\((\.[^)]*?)([\w-]+)\.md\)", r"](\1\2.html)", text)
+    text = re.sub(r"\]\(((\.[^)]*?/)?)README\.md\)", r"](\1index.html)", text)
+    text = re.sub(r"\]\(((\.[^)]*?/)?)([^)/]+)\.md\)", r"](\1\3.html)", text)
     return page(title, markdown_to_html(text), crumbs=crumbs, depth=depth)
+
+
+def _md_crumbs(rel: Path, depth: int) -> str:
+    if not depth:
+        return ""
+    crumbs = f'<a href="{"../" * depth}index.html">{icon("home", "ico-sm")} All courses</a>'
+    if rel.parts[0] != "courses" or depth < 3:
+        return crumbs
+    up = "../" * (depth - 2)
+    label = html_mod.escape(course_label(rel.parts[1]))
+    crumbs += f'<span class="sep">&rsaquo;</span><a href="{up}index.html">{label}</a>'
+    section = html_mod.escape(_pretty(rel.parts[2]))
+    if depth == 3:
+        crumbs += f'<span class="sep">&rsaquo;</span><span>{section}</span>'
+    else:
+        sec_up = "../" * (depth - 3)
+        crumbs += (
+            f'<span class="sep">&rsaquo;</span>'
+            f'<a href="{sec_up}index.html">{section}</a>'
+            f'<span class="sep">&rsaquo;</span>'
+            f"<span>{html_mod.escape(_pretty(rel.parts[-2]))}</span>"
+        )
+    return crumbs
+
+
+def _write_pdf_viewers(root: Path, course_dir: Path) -> int:
+    count = 0
+    for pdf in course_dir.rglob("*.pdf"):
+        if not pdf.is_file() or _is_plumbing(pdf):
+            continue
+        folder = pdf.parent
+        rel = folder.relative_to(root)
+        depth = len(rel.parts)
+        crumbs = (
+            f'<a href="{"../" * depth}index.html">{icon("home", "ico-sm")} All courses</a>'
+            f'<span class="sep">&rsaquo;</span>'
+            f'<a href="{"../" * (depth - 2)}index.html">'
+            f"{html_mod.escape(course_label(course_dir.name))}</a>"
+            f'<span class="sep">&rsaquo;</span>'
+            f'<a href="./index.html">{html_mod.escape(_pretty(folder.name))}</a>'
+        )
+        fs_path(folder / f"{pdf.stem}.view.html").write_text(
+            pdf_viewer(pdf, depth=depth, crumbs=crumbs), encoding="utf-8"
+        )
+        count += 1
+    return count
+
+
+def build_search(root: Path) -> None:
+    """A self-contained search page. The only generated file that contains a script."""
+    entries: list[dict[str, str]] = []
+    for md_path in sorted(root.rglob("*.md")):
+        rel = md_path.relative_to(root)
+        is_index = md_path.name == "README.md"
+        href = str(rel.with_name("index.html" if is_index else md_path.stem + ".html")).replace(
+            "\\", "/"
+        )
+        text = fs_path(md_path).read_text(encoding="utf-8", errors="ignore")
+        title_match = re.search(r"^#\s+(.+)$", text, re.M)
+        title = title_match.group(1).strip() if title_match else md_path.stem
+        snippet = re.sub(r"[#*_`\[\]]+", " ", text)
+        snippet = re.sub(r"\s+", " ", snippet).strip()[:240]
+        entries.append({"title": title, "href": href, "text": snippet})
+
+    payload = json.dumps(entries, ensure_ascii=False).replace("</", "<\\/")
+    body = (
+        "<h1>Search</h1>\n"
+        '<p class="sub">Everything in this archive, searched on this page. '
+        "Nothing is sent anywhere.</p>\n"
+        '<p><input id="q" type="search" placeholder="Find a course, file or page" '
+        'aria-label="Search" class="q"></p>\n'
+        '<ul id="hits" class="hits"></ul>'
+    )
+    script = f"""<script>
+const INDEX = {payload};
+const hits = document.getElementById("hits");
+document.getElementById("q").addEventListener("input", function () {{
+  const q = this.value.trim().toLowerCase();
+  hits.innerHTML = "";
+  if (q.length < 2) return;
+  let n = 0;
+  for (const item of INDEX) {{
+    const hay = (item.title + " " + item.text).toLowerCase();
+    if (hay.indexOf(q) === -1) continue;
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = item.href;
+    a.textContent = item.title;
+    li.appendChild(a);
+    hits.appendChild(li);
+    if (++n >= 50) break;
+  }}
+  if (!n) hits.innerHTML = "<li><em>No matches.</em></li>";
+}});
+</script>"""
+    fs_path(root / "search.html").write_text(
+        page(
+            "Search",
+            body,
+            crumbs=f'<a href="./index.html">{icon("home", "ico-sm")} All courses</a>',
+            depth=0,
+            csp=_CSP_SEARCH,
+            extra_head=script,
+        ),
+        encoding="utf-8",
+    )
 
 
 def build_site(root: Path) -> int:
@@ -664,16 +863,7 @@ def build_site(root: Path) -> int:
         depth = len(rel.parts) - 1
         is_index = md_path.name == "README.md"
         target = md_path.with_name("index.html" if is_index else md_path.stem + ".html")
-
-        crumbs = ""
-        if depth:
-            crumbs = f'<a href="{"../" * depth}index.html">{icon("home", "ico-sm")} All courses</a>'
-            # Everything below courses/<course>/ also links back to its course index.
-            # That index lives (depth - 2) levels up; at depth 2 the page *is* it.
-            if rel.parts[0] == "courses" and depth > 2:
-                up = "../" * (depth - 2)
-                label = html_mod.escape(course_label(rel.parts[1]))
-                crumbs += f'<span class="sep">&rsaquo;</span><a href="{up}index.html">{label}</a>'
+        crumbs = _md_crumbs(rel, depth)
 
         if depth == 0:
             title = "Canvas Archive"
@@ -716,13 +906,7 @@ def build_site(root: Path) -> int:
                 continue
             rel = folder.relative_to(root)
             depth = len(rel.parts)
-            crumbs = (
-                f'<a href="{"../" * depth}index.html">'
-                f"{icon('home', 'ico-sm')} All courses</a>"
-                f'<span class="sep">&rsaquo;</span>'
-                f'<a href="{"../" * (depth - 2)}index.html">'
-                f"{html_mod.escape(course_label(course_dir.name))}</a>"
-            )
+            crumbs = _md_crumbs(rel / "index.html", depth)
             fs_path(folder / "index.html").write_text(
                 file_listing(
                     folder,
@@ -734,17 +918,7 @@ def build_site(root: Path) -> int:
             )
             count += 1
 
-            # One viewer page per PDF, so documents open inside the archive.
-            for pdf in folder.glob("*.pdf"):
-                view_crumbs = (
-                    crumbs
-                    + '<span class="sep">&rsaquo;</span>'
-                    + f'<a href="./index.html">{html_mod.escape(_pretty(folder.name))}</a>'
-                )
-                fs_path(folder / f"{pdf.stem}.view.html").write_text(
-                    pdf_viewer(pdf, depth=depth, crumbs=view_crumbs), encoding="utf-8"
-                )
-                count += 1
+        count += _write_pdf_viewers(root, course_dir)
 
     # A course index should also link to its section pages.
     for course_dir in (root / "courses").glob("*"):
@@ -757,7 +931,7 @@ def build_site(root: Path) -> int:
                 continue
             page_file = section / "index.html"
             if page_file.exists():
-                items = [f for f in section.rglob("*") if f.is_file() and f.suffix != ".html"]
+                items = [f for f in section.rglob("*") if f.is_file() and not _is_plumbing(f)]
                 note = f"{len(items)} file{'s' if len(items) != 1 else ''}" if items else ""
                 cards.append(
                     f'<a class="card" href="./{quote(section.name)}/index.html">'
@@ -770,7 +944,11 @@ def build_site(root: Path) -> int:
             # Prefer the section's own page (pages/pages.html) over whichever
             # individual page happens to sort first.
             named = section / f"{section.name}.html"
-            pages = [named] if named.exists() else sorted(section.glob("*.html"))
+            pages = (
+                [named]
+                if named.exists()
+                else sorted(p for p in section.glob("*.html") if not p.name.endswith(".view.html"))
+            )
             if pages:
                 cards.append(
                     f'<a class="card" href="./{quote(section.name)}/{quote(pages[0].name)}">'
@@ -782,6 +960,9 @@ def build_site(root: Path) -> int:
             text = fs_path(index).read_text(encoding="utf-8")
             block = '<h2>Sections</h2>\n<div class="cards">' + "".join(cards) + "</div>"
             fs_path(index).write_text(
-                text.replace("<footer>", block + "\n<footer>"), encoding="utf-8"
+                text.replace("</main>", block + "\n</main>"), encoding="utf-8"
             )
+
+    build_search(root)
+    count += 1
     return count

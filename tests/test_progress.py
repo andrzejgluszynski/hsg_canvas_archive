@@ -61,8 +61,8 @@ def test_plain_progress_accepts_everything(capsys):
     assert "\x1b[" not in out  # no ANSI
 
 
-def test_rich_progress_shows_a_line_per_active_course():
-    console = Console(force_terminal=True, width=90, record=True)
+def test_rich_progress_shows_a_line_per_active_course(capsys):
+    console = Console(force_terminal=True, width=90)
     progress = RichProgress(console=console)
     with progress:
         progress.start_courses(4)
@@ -74,7 +74,7 @@ def test_rich_progress_shows_a_line_per_active_course():
         progress.set_step(b, "submissions")
         progress.advance_bytes(487_000_000)
         progress.refresh()
-        text = console.export_text()
+    text = capsys.readouterr().out
 
     assert "All courses" in text
     assert "09 Corporate Finance II" in text
@@ -130,16 +130,27 @@ def test_overall_bar_advances_as_courses_finish():
         assert overall.total == 3
 
 
-def test_long_course_names_are_truncated():
-    console = Console(force_terminal=True, width=90, record=True)
+def test_long_course_names_are_truncated(capsys):
+    console = Console(force_terminal=True, width=90)
     progress = RichProgress(console=console)
     with progress:
         progress.start_courses(1)
         progress.add_course("X" * 120)
         progress.refresh()
-        text = console.export_text()
+    text = capsys.readouterr().out
     assert "..." in text
     assert "X" * 60 not in text
+
+
+def test_rich_markup_in_course_names_is_escaped(capsys):
+    console = Console(force_terminal=True, width=90)
+    progress = RichProgress(console=console)
+    with progress:
+        progress.start_courses(1)
+        progress.add_course("Finance [bold]hack[/bold]")
+        progress.refresh()
+    text = capsys.readouterr().out
+    assert "Finance [bold]hack[/bold]" in text
 
 
 def test_rich_falls_back_when_construction_fails(monkeypatch):

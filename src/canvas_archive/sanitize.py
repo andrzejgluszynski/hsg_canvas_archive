@@ -57,6 +57,9 @@ def safe_component(
     text = unicodedata.normalize("NFC", name)
     text = text.replace(" ", " ")
     text = _strip_unsafe_categories(text)
+    # Unicode slashes that would otherwise survive as a path separator lookalike.
+    for sep in ("\u2215", "\uff0f", "\u2044", "\u29f8"):
+        text = text.replace(sep, "-")
 
     # Replace rather than delete, so distinct titles stay distinct.
     text = _ILLEGAL.sub("-", text)
