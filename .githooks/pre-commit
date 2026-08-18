@@ -1,0 +1,15 @@
+#!/bin/sh
+# Block commits containing anything token-shaped.
+#
+# This exists because a real Canvas token once made it into a test fixture, and this
+# repository is public. Install with:  git config core.hooksPath .githooks
+set -eu
+
+if git diff --cached --name-only -z \
+   | xargs -0 -r grep -nEI '\b[0-9]{3,6}~[A-Za-z0-9]{30,}\b' 2>/dev/null \
+   | grep -v 'EXAMPLEtokenNOTreal'; then
+  echo ""
+  echo "COMMIT BLOCKED: something token-shaped is staged (see above)."
+  echo "Canvas tokens look like 19114~xxxxx. Use a fake value in tests."
+  exit 1
+fi

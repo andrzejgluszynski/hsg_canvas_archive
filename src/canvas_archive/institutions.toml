@@ -1,0 +1,7 @@
+# Pre-seeded Canvas deployments. Anything else is typed in at the prompt.
+[[institution]]
+id        = "unisg-exec"
+name      = "University of St. Gallen — Executive Learning"
+base_url  = "https://exec-learning.unisg.ch"
+token_url = "https://exec-learning.unisg.ch/profile/settings"
+default   = true
