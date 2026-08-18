@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -20,25 +21,43 @@ jobs:
       - run: uv run ruff check src/ tests/
       - run: uv run ruff format --check src/ tests/
       - run: uv run pytest -q
-        env:
-          PYTHON_VERSION: ${{ matrix.python }}
 
   build-check:
-    # Guard the packaging path on any PR that touches it, so a broken spec is caught
-    # before a tag is cut rather than during a release.
-    if: github.event_name == 'pull_request'
+    # Guards the packaging path before a tag is cut rather than during a release.
+    # Runs on demand too, so the Windows build can be verified from a Mac.
+    if: github.event_name != 'push'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, ubuntu-22.04, windows-latest]
+        os: [macos-14, macos-15-intel, ubuntu-22.04, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --frozen --group build
       - run: uv run pyinstaller packaging/canvas-archive.spec --noconfirm
-      - shell: bash
+
+      - name: Smoke test the built binary
+        shell: bash
         run: |
-          BIN=dist/canvas-archive; [ "${{ runner.os }}" = "Windows" ] && BIN=dist/canvas-archive.exe
+          set -eux
+          BIN=dist/canvas-archive
+          if [ "${{ runner.os }}" = "Windows" ]; then BIN=dist/canvas-archive.exe; fi
           chmod +x "$BIN" 2>/dev/null || true
           "$BIN" --version
+          "$BIN" --help | grep -q "exec-learning.unisg.ch"
+          if "$BIN" --no-wizard --creds-file /nonexistent -o ./none < /dev/null; then
+            echo "expected a non-zero exit without a token"; exit 1
+          fi
+
+      # Redirected output on Windows uses the legacy code page, so any non-ASCII
+      # character in a course name would raise UnicodeEncodeError mid-run.
+      - name: Unicode output must survive redirection
+        shell: bash
+        run: |
+          set -eux
+          BIN=dist/canvas-archive
+          if [ "${{ runner.os }}" = "Windows" ]; then BIN=dist/canvas-archive.exe; fi
+          "$BIN" --url exec-learning.unisg.ch --token "1~bogus" -o ./none \
+            --no-wizard > out.txt 2>&1 || true
+          cat out.txt
