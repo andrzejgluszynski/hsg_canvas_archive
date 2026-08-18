@@ -99,7 +99,11 @@ class CanvasClient:
         return f"{self.api}/{path.lstrip('/')}"
 
     async def _request(
-        self, client: httpx.AsyncClient, url: str, *, params: Any = None,
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        *,
+        params: Any = None,
         max_attempts: int | None = None,
     ) -> httpx.Response:
         max_attempts = max_attempts or self.retries
@@ -199,8 +203,11 @@ class CanvasClient:
         `refresh` returns a fresh URL: Canvas file verifiers expire, so a long run hits
         a wave of 403s hours in.
         """
-        if (expected_size is not None and fs_path(dest).exists()
-                and fs_path(dest).stat().st_size == expected_size):
+        if (
+            expected_size is not None
+            and fs_path(dest).exists()
+            and fs_path(dest).stat().st_size == expected_size
+        ):
             return DownloadResult(dest, expected_size, skipped=True)
 
         fs_path(dest.parent).mkdir(parents=True, exist_ok=True)

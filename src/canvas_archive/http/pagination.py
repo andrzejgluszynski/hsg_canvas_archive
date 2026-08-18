@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-_LINK_RE = re.compile(r'<(?P<url>[^>]*)>\s*;\s*(?P<params>.*)')
+_LINK_RE = re.compile(r"<(?P<url>[^>]*)>\s*;\s*(?P<params>.*)")
 _REL_RE = re.compile(r'rel\s*=\s*"?(?P<rel>[^",;]+)"?')
 
 

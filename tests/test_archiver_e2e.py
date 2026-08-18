@@ -32,9 +32,16 @@ def _mount(*, file_failures: int = 0, submissions=None) -> dict:
     respx.get(url__startswith=f"{API}/courses?").mock(
         side_effect=lambda request: httpx.Response(
             200,
-            json=[{"id": 1, "name": "Strategy 101", "course_code": "STRAT",
-                   "syllabus_body": "<p>Read everything</p>"}]
-            if "enrollment_state=active" in str(request.url) else [],
+            json=[
+                {
+                    "id": 1,
+                    "name": "Strategy 101",
+                    "course_code": "STRAT",
+                    "syllabus_body": "<p>Read everything</p>",
+                }
+            ]
+            if "enrollment_state=active" in str(request.url)
+            else [],
         )
     )
     # Locked down, exactly like the real instance.
@@ -43,23 +50,34 @@ def _mount(*, file_failures: int = 0, submissions=None) -> dict:
         return_value=httpx.Response(404, json={"message": "That page has been disabled"})
     )
     respx.get(url__startswith=f"{API}/courses/1/modules").mock(
-        return_value=httpx.Response(200, json=[{
-            "id": 10, "name": "Week 1",
-            "items": [
-                {"id": 100, "type": "File", "content_id": 500, "title": "Slides"},
-                {"id": 101, "type": "Page", "page_url": "intro", "title": "Intro"},
-                {"id": 102, "type": "ExternalUrl", "external_url": "https://example.com"},
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 10,
+                    "name": "Week 1",
+                    "items": [
+                        {"id": 100, "type": "File", "content_id": 500, "title": "Slides"},
+                        {"id": 101, "type": "Page", "page_url": "intro", "title": "Intro"},
+                        {"id": 102, "type": "ExternalUrl", "external_url": "https://example.com"},
+                    ],
+                }
             ],
-        }])
+        )
     )
     respx.get(f"{API}/courses/1/pages/intro").mock(
         return_value=httpx.Response(200, json={"title": "Intro", "body": "<h1>Hello</h1>"})
     )
     respx.get(f"{API}/courses/1/files/500").mock(
-        return_value=httpx.Response(200, json={
-            "id": 500, "display_name": "Slides.pdf", "size": len(PDF),
-            "url": "https://files.test/500?verifier=secret",
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 500,
+                "display_name": "Slides.pdf",
+                "size": len(PDF),
+                "url": "https://files.test/500?verifier=secret",
+            },
+        )
     )
     respx.get(url__startswith=f"{API}/courses/1/assignments").mock(
         return_value=httpx.Response(200, json=[])
@@ -133,7 +151,7 @@ async def test_verifier_is_stripped_from_persisted_metadata(client, tmp_path):
 @respx.mock
 async def test_first_pass_failure_is_recovered_by_the_retry_sweep(client, tmp_path):
     """Enough failures to exhaust the first pass, but the calm second pass succeeds."""
-    state = _mount(file_failures=2)   # retries=2, so the first pass gives up
+    state = _mount(file_failures=2)  # retries=2, so the first pass gives up
     stats = await Archiver(client, tmp_path).run()
 
     assert state["file_attempts"] > 2
@@ -157,11 +175,15 @@ async def test_rerun_skips_completed_files(client, tmp_path):
     "raw,expected",
     [
         ("https://x/files/1?verifier=abc123", "https://x/files/1"),
-        ("https://x/files/1/download?download_frd=1&verifier=ab_c-1.2&y=2",
-         "https://x/files/1/download?download_frd=1&y=2"),
+        (
+            "https://x/files/1/download?download_frd=1&verifier=ab_c-1.2&y=2",
+            "https://x/files/1/download?download_frd=1&y=2",
+        ),
         # The dangerous case: verifiers inline in HTML bodies, not just metadata.
-        ('<a href="https://x/files/9/preview?verifier=deadbeef">s</a>',
-         '<a href="https://x/files/9/preview">s</a>'),
+        (
+            '<a href="https://x/files/9/preview?verifier=deadbeef">s</a>',
+            '<a href="https://x/files/9/preview">s</a>',
+        ),
         ("body with &amp;verifier=tok123 escaped", "body with  escaped"),
         ("no token here", "no token here"),
         ("", ""),
@@ -192,10 +214,13 @@ async def test_no_verifier_survives_into_any_written_file(client, tmp_path):
     """The whole archive, not just files.json, must be free of capability tokens."""
     _mount()
     respx.get(f"{API}/courses/1/pages/intro").mock(
-        return_value=httpx.Response(200, json={
-            "title": "Intro",
-            "body": '<a href="https://files.test/9?verifier=leaky">notes</a>',
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "title": "Intro",
+                "body": '<a href="https://files.test/9?verifier=leaky">notes</a>',
+            },
+        )
     )
     await Archiver(client, tmp_path).run()
 
@@ -208,28 +233,44 @@ async def test_no_verifier_survives_into_any_written_file(client, tmp_path):
 # --- submissions -------------------------------------------------------------
 
 FILE_SUBMISSION = {
-    "id": 1, "assignment_id": 77, "attempt": 1, "workflow_state": "graded",
-    "score": 18.0, "grade": "18",
+    "id": 1,
+    "assignment_id": 77,
+    "attempt": 1,
+    "workflow_state": "graded",
+    "score": 18.0,
+    "grade": "18",
     "assignment": {"id": 77, "name": "Essay: Why firms exist", "points_possible": 20},
     "attachments": [
-        {"id": 900, "display_name": "essay.pdf", "size": 8,
-         "url": "https://files.test/900?verifier=abc"}
+        {
+            "id": 900,
+            "display_name": "essay.pdf",
+            "size": 8,
+            "url": "https://files.test/900?verifier=abc",
+        }
     ],
     "submission_comments": [
-        {"author": {"display_name": "Prof. Meier"}, "created_at": "2026-03-01T10:00:00Z",
-         "comment": "Strong argument, weak conclusion."}
+        {
+            "author": {"display_name": "Prof. Meier"},
+            "created_at": "2026-03-01T10:00:00Z",
+            "comment": "Strong argument, weak conclusion.",
+        }
     ],
 }
 
 # No `attachments` key at all -- the exact shape the previous tool silently dropped.
 TEXT_SUBMISSION = {
-    "id": 2, "assignment_id": 88, "attempt": 1, "workflow_state": "submitted",
+    "id": 2,
+    "assignment_id": 88,
+    "attempt": 1,
+    "workflow_state": "submitted",
     "body": "<p>My typed answer</p>",
     "assignment": {"id": 88, "name": "Reflection"},
 }
 
 UNSUBMITTED = {
-    "id": 3, "assignment_id": 99, "workflow_state": "unsubmitted",
+    "id": 3,
+    "assignment_id": 99,
+    "workflow_state": "unsubmitted",
     "assignment": {"id": 99, "name": "Never handed in"},
 }
 
@@ -278,12 +319,13 @@ async def test_unsubmitted_assignments_do_not_create_folders(client, tmp_path):
 async def test_mixed_submissions_all_recorded(client, tmp_path):
     _mount(submissions=[FILE_SUBMISSION, TEXT_SUBMISSION, UNSUBMITTED])
     stats = await Archiver(client, tmp_path).run()
-    assert stats.submissions == 2          # the unsubmitted one is correctly excluded
+    assert stats.submissions == 2  # the unsubmitted one is correctly excluded
     assert stats.submission_files == 1
     subs = next((tmp_path / "courses").iterdir()) / "submissions"
     assert (subs / "submissions.json").exists()
     assert {p.name for p in subs.iterdir() if p.is_dir()} == {
-        "Essay- Why firms exist", "Reflection"
+        "Essay- Why firms exist",
+        "Reflection",
     }
     await client.aclose()
 
@@ -298,9 +340,9 @@ async def test_one_failing_exporter_does_not_cost_the_course_its_files(client, t
     stats = await Archiver(client, tmp_path, build_html=False).run()
 
     course_dir = next((tmp_path / "courses").iterdir())
-    assert (course_dir / "files" / "Slides.pdf").read_bytes() == PDF   # still archived
+    assert (course_dir / "files" / "Slides.pdf").read_bytes() == PDF  # still archived
     assert stats.files_downloaded == 1
-    assert any("quizzes" in e for e in stats.errors)                   # and reported
+    assert any("quizzes" in e for e in stats.errors)  # and reported
 
 
 @respx.mock

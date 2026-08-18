@@ -24,8 +24,16 @@ from .tui.progress import human, make_progress
 from .tui.wizard import run_wizard
 
 ALL_CONTENT = [
-    "modules", "files", "pages", "grades", "submissions",
-    "assignments", "announcements", "discussions", "quizzes", "syllabus",
+    "modules",
+    "files",
+    "pages",
+    "grades",
+    "submissions",
+    "assignments",
+    "announcements",
+    "discussions",
+    "quizzes",
+    "syllabus",
 ]
 
 
@@ -36,9 +44,7 @@ class RedactingFilter(logging.Filter):
         if isinstance(record.msg, str):
             record.msg = redact(record.msg)
         if record.args:
-            record.args = tuple(
-                redact(a) if isinstance(a, str) else a for a in record.args
-            )
+            record.args = tuple(redact(a) if isinstance(a, str) else a for a in record.args)
         return True
 
 
@@ -61,11 +67,16 @@ def build_parser() -> argparse.ArgumentParser:
         prog="canvas-archive",
         description="Archive everything from your Canvas LMS account before you lose access.",
     )
-    parser.add_argument("--url", default=inst.base_url if inst else None,
-                        help=f"Canvas URL (default: {inst.base_url if inst else 'required'})")
+    parser.add_argument(
+        "--url",
+        default=inst.base_url if inst else None,
+        help=f"Canvas URL (default: {inst.base_url if inst else 'required'})",
+    )
     parser.add_argument("--token", help=f"API token (or set ${ENV_VAR})")
     parser.add_argument(
-        "--creds-file", type=Path, default=Path("creds.txt"),
+        "--creds-file",
+        type=Path,
+        default=Path("creds.txt"),
         help="file containing the API token (default: creds.txt)",
     )
     parser.add_argument("-o", "--output", type=Path, default=Path("output"))
@@ -75,14 +86,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--course", action="append", type=int, help="limit to course id (repeatable)"
     )
     parser.add_argument("--concurrency", type=int, default=6)
-    parser.add_argument("--retries", type=int, default=5,
-                        help="attempts per file before giving up (default: 5)")
-    parser.add_argument("--plain", action="store_true",
-                        help="disable the progress bar")
-    parser.add_argument("--no-html", action="store_true",
-                        help="skip the offline HTML viewer")
-    parser.add_argument("--no-wizard", action="store_true",
-                        help="never prompt; fail if the token is missing")
+    parser.add_argument(
+        "--retries", type=int, default=5, help="attempts per file before giving up (default: 5)"
+    )
+    parser.add_argument("--plain", action="store_true", help="disable the progress bar")
+    parser.add_argument("--no-html", action="store_true", help="skip the offline HTML viewer")
+    parser.add_argument(
+        "--no-wizard", action="store_true", help="never prompt; fail if the token is missing"
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("--version", action="version", version=__version__)
     return parser
@@ -99,8 +110,10 @@ def resolve_content(only: str | None, skip: str | None) -> set[str]:
         chosen -= {c.strip() for c in skip.split(",") if c.strip()}
     unknown = chosen - set(ALL_CONTENT)
     if unknown:
-        raise SystemExit(f"unknown content type(s): {', '.join(sorted(unknown))}\n"
-                         f"valid: {', '.join(ALL_CONTENT)}")
+        raise SystemExit(
+            f"unknown content type(s): {', '.join(sorted(unknown))}\n"
+            f"valid: {', '.join(ALL_CONTENT)}"
+        )
     if not chosen:
         raise SystemExit("nothing selected")
     return chosen
@@ -157,7 +170,10 @@ async def run(args: argparse.Namespace) -> int:
 
         with progress:
             archiver = Archiver(
-                client, output.expanduser(), content=content, progress=progress,
+                client,
+                output.expanduser(),
+                content=content,
+                progress=progress,
                 build_html=not args.no_html,
             )
             stats = await archiver.run(set(args.course) if args.course else None)
@@ -181,8 +197,7 @@ def friendly_auth_error(exc: Exception, base_url: str) -> str:
     if status == 404:
         return f"{base_url} answered, but it doesn't look like a Canvas site."
     return (
-        f"Couldn't reach {base_url}.\n\n  {redact(str(exc))}\n\n"
-        "  Check your internet connection."
+        f"Couldn't reach {base_url}.\n\n  {redact(str(exc))}\n\n  Check your internet connection."
     )
 
 
@@ -197,8 +212,10 @@ def print_summary(stats, output, wizard_used: bool) -> None:
     if stats.recovered:
         print(f"  Recovered on retry {stats.recovered}")
     if stats.submissions:
-        print(f"  Your submissions {stats.submissions}"
-              f"   ({stats.submission_files} files, {human(stats.submission_bytes)})")
+        print(
+            f"  Your submissions {stats.submissions}"
+            f"   ({stats.submission_files} files, {human(stats.submission_bytes)})"
+        )
     if stats.quizzes:
         print(f"  Quizzes          {stats.quizzes}")
     if stats.discussion_posts:

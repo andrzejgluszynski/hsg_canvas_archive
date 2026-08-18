@@ -67,12 +67,16 @@ def _grade_line(grades: dict | None) -> str:
     letter = grades.get("current_grade")
     if score is None and not letter:
         return ""
-    parts = [p for p in (str(letter) if letter else None,
-                         f"{score}%" if score is not None else None) if p]
+    parts = [
+        p
+        for p in (str(letter) if letter else None, f"{score}%" if score is not None else None)
+        if p
+    ]
     return " / ".join(parts)
 
 
 # --- per content type --------------------------------------------------------
+
 
 def course_overview(course: dict, grades: dict | None, counts: dict[str, int]) -> str:
     name = course.get("name") or "Course"
@@ -135,8 +139,7 @@ def submission_md(submission: dict) -> str:
     if submission.get("score") is not None:
         possible = assignment.get("points_possible")
         facts.append(
-            f"**Score:** {submission['score']}"
-            + (f" / {possible}" if possible is not None else "")
+            f"**Score:** {submission['score']}" + (f" / {possible}" if possible is not None else "")
         )
     if submission.get("grade"):
         facts.append(f"**Grade:** {submission['grade']}")
@@ -166,8 +169,12 @@ def submission_md(submission: dict) -> str:
         lines += ["", _section("Feedback"), ""]
         for comment in comments:
             author = (comment.get("author") or {}).get("display_name") or "Instructor"
-            lines += [f"**{author}** — {fmt_date(comment.get('created_at'))}", "",
-                      _body(comment.get("comment")) or (comment.get("comment") or ""), ""]
+            lines += [
+                f"**{author}** — {fmt_date(comment.get('created_at'))}",
+                "",
+                _body(comment.get("comment")) or (comment.get("comment") or ""),
+                "",
+            ]
 
     rubric = submission.get("rubric_assessment") or {}
     criteria = {c.get("id"): c for c in (assignment.get("rubric") or [])}
@@ -227,9 +234,7 @@ def _entry_lines(entries: list[dict], depth: int = 0) -> list[str]:
         if entry.get("deleted"):
             continue
         author = (
-            entry.get("user_name")
-            or (entry.get("user") or {}).get("display_name")
-            or "Someone"
+            entry.get("user_name") or (entry.get("user") or {}).get("display_name") or "Someone"
         )
         stamp = fmt_date(entry.get("created_at"))
         lines.append(f"{prefix}**{author}** — {stamp}")
@@ -315,8 +320,14 @@ def quizzes_md(course_name: str, quizzes: list[dict]) -> str:
 def modules_md(course_name: str, modules: list[dict]) -> str:
     """The course structure -- the closest thing to a table of contents."""
     lines = [f"# Course structure — {course_name}", ""]
-    icons = {"File": "[file]", "Page": "[page]", "ExternalUrl": "[link]",
-             "Assignment": "[task]", "Quiz": "[quiz]", "SubHeader": ""}
+    icons = {
+        "File": "[file]",
+        "Page": "[page]",
+        "ExternalUrl": "[link]",
+        "Assignment": "[task]",
+        "Quiz": "[quiz]",
+        "SubHeader": "",
+    }
     for module in modules:
         lines += [f"## {module.get('name') or 'Module'}", ""]
         for item in module.get("items") or []:
@@ -363,8 +374,13 @@ def archive_index(user: dict, host: str, courses: list[dict[str, Any]]) -> str:
         folder = quote(entry["folder"])
         name = entry["name"].strip().replace("|", "\\|")
         lines.append(f"| {name} | {grade} | [open](./courses/{folder}/README.md) |")
-    lines += ["", "---", "",
-              "Each course folder holds a `README.md` overview, the readable Markdown "
-              "versions of its content, the original files, and the raw JSON the data "
-              "came from.", ""]
+    lines += [
+        "",
+        "---",
+        "",
+        "Each course folder holds a `README.md` overview, the readable Markdown "
+        "versions of its content, the original files, and the raw JSON the data "
+        "came from.",
+        "",
+    ]
     return _render(lines)

@@ -57,8 +57,8 @@ async def test_truncated_transfer_resumes_by_range(client, tmp_path):
     respx.get(FILE_URL).mock(side_effect=handler)
     result = await client.download(FILE_URL, tmp_path / "doc.pdf", expected_size=len(BODY))
 
-    assert calls[0] is None            # first attempt asks for the whole file
-    assert calls[1] == "bytes=2000-"   # second resumes from what landed
+    assert calls[0] is None  # first attempt asks for the whole file
+    assert calls[1] == "bytes=2000-"  # second resumes from what landed
     assert result.bytes_written == len(BODY)
     assert (tmp_path / "doc.pdf").read_bytes() == BODY
     await client.aclose()
@@ -67,6 +67,7 @@ async def test_truncated_transfer_resumes_by_range(client, tmp_path):
 @respx.mock
 async def test_server_ignoring_range_restarts_cleanly(client, tmp_path):
     """A 200 in reply to a Range request means start over, not append."""
+
     def handler(request):
         if not hasattr(handler, "seen"):
             handler.seen = True
@@ -75,7 +76,7 @@ async def test_server_ignoring_range_restarts_cleanly(client, tmp_path):
 
     respx.get(FILE_URL).mock(side_effect=handler)
     await client.download(FILE_URL, tmp_path / "doc.pdf", expected_size=len(BODY))
-    assert (tmp_path / "doc.pdf").read_bytes() == BODY   # not 2000 bytes of garbage + body
+    assert (tmp_path / "doc.pdf").read_bytes() == BODY  # not 2000 bytes of garbage + body
     await client.aclose()
 
 
@@ -101,7 +102,7 @@ async def test_persistent_failure_raises_after_budget(client, tmp_path):
     route = respx.get(FILE_URL).mock(return_value=httpx.Response(500))
     with pytest.raises(RuntimeError):
         await client.download(FILE_URL, tmp_path / "doc.pdf", expected_size=len(BODY))
-    assert route.call_count == 4          # honours the retry budget
+    assert route.call_count == 4  # honours the retry budget
     assert not (tmp_path / "doc.pdf").exists()
     await client.aclose()
 
@@ -143,7 +144,8 @@ async def test_paginate_walks_link_headers(client):
         if "page=2" in str(request.url):
             return httpx.Response(200, json=[{"id": 2}])
         return httpx.Response(
-            200, json=[{"id": 1}],
+            200,
+            json=[{"id": 1}],
             headers={"Link": f'<{BASE}/api/v1/things?page=2>; rel="next"'},
         )
 
@@ -165,7 +167,8 @@ async def test_pagination_loop_is_broken(client):
     """A Link header pointing back at itself must not spin forever."""
     respx.get(url__startswith=f"{BASE}/api/v1/loop").mock(
         return_value=httpx.Response(
-            200, json=[{"id": 1}],
+            200,
+            json=[{"id": 1}],
             headers={"Link": f'<{BASE}/api/v1/loop>; rel="next"'},
         )
     )

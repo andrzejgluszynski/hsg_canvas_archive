@@ -40,7 +40,7 @@ def test_ordered_list():
 
 def test_table_renders_with_scroll_wrapper():
     out = markdown_to_html("| A | B |\n|---|---|\n| 1 | 2 |")
-    assert '<div class="tablewrap">' in out       # wide tables must not break the page
+    assert '<div class="tablewrap">' in out  # wide tables must not break the page
     assert "<th>A</th>" in out and "<td>1</td>" in out
 
 
@@ -58,7 +58,7 @@ def test_html_in_markdown_is_escaped():
 
 def test_page_shell_is_self_contained():
     out = page("T", "<p>x</p>")
-    assert "<style>" in out                        # CSS inlined, never fetched
+    assert "<style>" in out  # CSS inlined, never fetched
     assert "http://" not in out and "https://" not in out
     assert "<title>T</title>" in out
 

@@ -37,9 +37,7 @@ _VERIFIER = re.compile(r"(?:&amp;|[?&])verifier=[A-Za-z0-9._~-]+", re.I)
 # Images embedded in Canvas HTML bodies point back at course files by URL. Left alone
 # they turn the "offline" viewer into one that needs the internet -- and needs the
 # account that is about to be revoked.
-_INLINE_IMAGE = re.compile(
-    r"!\[([^\]]*)\]\((https?://[^)\s]*?/courses/(\d+)/files/(\d+)[^)\s]*)\)"
-)
+_INLINE_IMAGE = re.compile(r"!\[([^\]]*)\]\((https?://[^)\s]*?/courses/(\d+)/files/(\d+)[^)\s]*)\)")
 
 
 def strip_verifier(text: str | None) -> str | None:
@@ -134,8 +132,16 @@ class Archiver:
         self._index: list[dict] = []
         self._graded: dict[int, list[dict]] = {}
         self.content = content or {
-            "files", "pages", "modules", "grades", "submissions",
-            "assignments", "announcements", "discussions", "syllabus", "quizzes",
+            "files",
+            "pages",
+            "modules",
+            "grades",
+            "submissions",
+            "assignments",
+            "announcements",
+            "discussions",
+            "syllabus",
+            "quizzes",
         }
 
     def want(self, key: str) -> bool:
@@ -148,9 +154,12 @@ class Archiver:
         write_json(self.out / "user" / "profile.json", user)
         log.info("signed in as %s (id %s)", user.get("name"), user.get("id"))
 
-        enrollments = [e async for e in self.client.paginate(
-            "users/self/enrollments", **{"state[]": ["active", "completed"]}
-        )]
+        enrollments = [
+            e
+            async for e in self.client.paginate(
+                "users/self/enrollments", **{"state[]": ["active", "completed"]}
+            )
+        ]
         write_json(self.out / "user" / "enrollments.json", enrollments)
         grades_by_course = {
             e["course_id"]: e.get("grades") for e in enrollments if e.get("course_id")
@@ -199,13 +208,16 @@ class Archiver:
             except Exception as exc:
                 log.warning("HTML viewer generation failed: %s", exc)
 
-        write_json(self.out / "archive.json", {
-            "canvas_host": self.client.base_url,
-            "user_id": user.get("id"),
-            "user_name": user.get("name"),
-            "courses": len(courses),
-            "content": sorted(self.content),
-        })
+        write_json(
+            self.out / "archive.json",
+            {
+                "canvas_host": self.client.base_url,
+                "user_id": user.get("id"),
+                "user_name": user.get("name"),
+                "courses": len(courses),
+                "content": sorted(self.content),
+            },
+        )
         return self.stats
 
     async def archive_course(self, course: dict, grades: dict | None) -> None:
@@ -225,8 +237,9 @@ class Archiver:
 
         modules = await self.archive_modules(cid, cdir, counts)
         if modules:
-            write_md(cdir / "modules" / "modules.md",
-                     md.modules_md(course.get("name") or "", modules))
+            write_md(
+                cdir / "modules" / "modules.md", md.modules_md(course.get("name") or "", modules)
+            )
 
         for key, path, params in (
             ("assignments", "assignments", {}),
@@ -268,18 +281,22 @@ class Archiver:
         await step("files", self.archive_files(cid, cdir, modules))
 
         if self.want("grades") and grades:
-            write_md(cdir / "grades" / "grades.md",
-                     md.grades_md(course.get("name") or "", grades, self._graded.get(cid, [])))
+            write_md(
+                cdir / "grades" / "grades.md",
+                md.grades_md(course.get("name") or "", grades, self._graded.get(cid, [])),
+            )
 
         write_md(cdir / "README.md", md.course_overview(course, grades, counts))
 
         # Last, so it can rewrite every Markdown file this course produced.
         await self.archive_inline_images(cid, cdir)
-        self._index.append({
-            "name": course.get("name") or str(cid),
-            "folder": course_dirname(course),
-            "grade": md._grade_line(grades),
-        })
+        self._index.append(
+            {
+                "name": course.get("name") or str(cid),
+                "folder": course_dirname(course),
+                "grade": md._grade_line(grades),
+            }
+        )
 
     async def archive_inline_images(self, cid: int, cdir: Path) -> None:
         """Download images embedded in course text and repoint them locally.
@@ -365,7 +382,8 @@ class Archiver:
                 record["_participants"] = view.get("participants") or []
             else:
                 entries = [
-                    e async for e in self.client.paginate(
+                    e
+                    async for e in self.client.paginate(
                         f"courses/{cid}/discussion_topics/{topic['id']}/entries"
                     )
                 ]
@@ -387,9 +405,7 @@ class Archiver:
         )
         return len(enriched)
 
-    async def archive_quizzes(
-        self, cid: int, cdir: Path, course: dict, modules: list[dict]
-    ) -> int:
+    async def archive_quizzes(self, cid: int, cdir: Path, course: dict, modules: list[dict]) -> int:
         """Quiz metadata and your own scores.
 
         The quiz *index* is often disabled, so ids also come from module items -- the
@@ -400,9 +416,7 @@ class Archiver:
         That is an instructor setting, not a failure, so it is reported as a skip.
         """
         quizzes = {
-            q["id"]: q
-            async for q in self.client.paginate(f"courses/{cid}/quizzes")
-            if q.get("id")
+            q["id"]: q async for q in self.client.paginate(f"courses/{cid}/quizzes") if q.get("id")
         }
 
         for module in modules:
@@ -455,21 +469,24 @@ class Archiver:
         params = {
             "student_ids[]": "self",
             "include[]": [
-                "assignment", "submission_comments",
-                "rubric_assessment", "submission_history",
+                "assignment",
+                "submission_comments",
+                "rubric_assessment",
+                "submission_history",
             ],
         }
-        submissions = [s async for s in self.client.paginate(
-            f"courses/{cid}/students/submissions", **params
-        )]
+        submissions = [
+            s async for s in self.client.paginate(f"courses/{cid}/students/submissions", **params)
+        ]
 
         if not submissions:
             # Some instances reject the rubric include; retry without it before
             # concluding the student genuinely has nothing.
             params["include[]"] = ["assignment", "submission_comments"]
-            submissions = [s async for s in self.client.paginate(
-                f"courses/{cid}/students/submissions", **params
-            )]
+            submissions = [
+                s
+                async for s in self.client.paginate(f"courses/{cid}/students/submissions", **params)
+            ]
             if not submissions:
                 self.stats.skipped["submissions not available"] += 1
                 return
@@ -549,9 +566,10 @@ class Archiver:
             self.stats.submission_files += 1
 
     async def archive_modules(self, cid: int, cdir: Path, counts: dict) -> list[dict]:
-        modules = [m async for m in self.client.paginate(
-            f"courses/{cid}/modules", **{"include[]": "items"}
-        )]
+        modules = [
+            m
+            async for m in self.client.paginate(f"courses/{cid}/modules", **{"include[]": "items"})
+        ]
         if not modules:
             self.stats.skipped["modules unavailable"] += 1
             return []

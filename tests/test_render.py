@@ -62,14 +62,21 @@ def test_nested_lists_indent():
 
 def test_submission_md_includes_score_feedback_and_rubric():
     submission = {
-        "score": 17.5, "grade": "A-", "submitted_at": "2026-03-01T09:00:00Z", "late": True,
+        "score": 17.5,
+        "grade": "A-",
+        "submitted_at": "2026-03-01T09:00:00Z",
+        "late": True,
         "assignment": {
-            "name": "Case study", "points_possible": 20,
+            "name": "Case study",
+            "points_possible": 20,
             "rubric": [{"id": "c1", "description": "Analysis"}],
         },
         "submission_comments": [
-            {"author": {"display_name": "Dr Legge"}, "created_at": "2026-03-02T10:00:00Z",
-             "comment": "Well argued."}
+            {
+                "author": {"display_name": "Dr Legge"},
+                "created_at": "2026-03-02T10:00:00Z",
+                "comment": "Well argued.",
+            }
         ],
         "rubric_assessment": {"c1": {"points": 9, "comments": "Clear"}},
         "attachments": [{"display_name": "case.pdf"}],
@@ -79,7 +86,7 @@ def test_submission_md_includes_score_feedback_and_rubric():
     assert "**Score:** 17.5 / 20" in out
     assert "**Late**" in out
     assert "Dr Legge" in out and "Well argued." in out
-    assert "| Analysis | 9 | Clear |" in out       # rubric id resolved to its label
+    assert "| Analysis | 9 | Clear |" in out  # rubric id resolved to its label
     assert "[case.pdf](./case.pdf)" in out
 
 
@@ -91,30 +98,43 @@ def test_grades_md_builds_a_table():
     out = grades_md(
         "Finance",
         {"current_score": 68.5, "current_grade": "4.75", "final_score": 68.5},
-        [{"score": 18, "graded_at": "2026-03-01T00:00:00Z",
-          "assignment": {"name": "Essay", "points_possible": 20}}],
+        [
+            {
+                "score": 18,
+                "graded_at": "2026-03-01T00:00:00Z",
+                "assignment": {"name": "Essay", "points_possible": 20},
+            }
+        ],
     )
     assert "**Overall: 4.75 / 68.5%**" in out
     assert "| Essay | 18 | 20 |" in out.replace(" 01 Mar 2026 |", "")
 
 
 def test_announcements_are_newest_first():
-    out = announcements_md("C", [
-        {"title": "Older", "posted_at": "2026-01-01T00:00:00Z", "message": "<p>a</p>"},
-        {"title": "Newer", "posted_at": "2026-06-01T00:00:00Z", "message": "<p>b</p>"},
-    ])
+    out = announcements_md(
+        "C",
+        [
+            {"title": "Older", "posted_at": "2026-01-01T00:00:00Z", "message": "<p>a</p>"},
+            {"title": "Newer", "posted_at": "2026-06-01T00:00:00Z", "message": "<p>b</p>"},
+        ],
+    )
     assert out.index("Newer") < out.index("Older")
 
 
 def test_modules_md_renders_structure_with_links():
-    out = modules_md("C", [{
-        "name": "Week 1",
-        "items": [
-            {"type": "SubHeader", "title": "Readings"},
-            {"type": "File", "title": "Slides.pdf"},
-            {"type": "ExternalUrl", "title": "Video", "external_url": "https://v/1"},
+    out = modules_md(
+        "C",
+        [
+            {
+                "name": "Week 1",
+                "items": [
+                    {"type": "SubHeader", "title": "Readings"},
+                    {"type": "File", "title": "Slides.pdf"},
+                    {"type": "ExternalUrl", "title": "Video", "external_url": "https://v/1"},
+                ],
+            }
         ],
-    }])
+    )
     assert "## Week 1" in out
     assert "**Readings**" in out
     assert "[file] Slides.pdf" in out
@@ -123,7 +143,8 @@ def test_modules_md_renders_structure_with_links():
 
 def test_archive_index_lists_courses_with_grades():
     out = archive_index(
-        {"name": "Student"}, "https://canvas.test",
+        {"name": "Student"},
+        "https://canvas.test",
         [{"name": "Finance", "folder": "Finance__F__1", "grade": "4.75 / 68.5%"}],
     )
     assert "**Student**" in out
@@ -133,28 +154,40 @@ def test_archive_index_lists_courses_with_grades():
 
 def test_attachment_links_are_url_encoded():
     """Filenames with spaces would otherwise produce links no viewer can follow."""
-    out = submission_md({
-        "assignment": {"name": "A"},
-        "attachments": [{"display_name": "My Essay (final) v2.pdf"}],
-    })
+    out = submission_md(
+        {
+            "assignment": {"name": "A"},
+            "attachments": [{"display_name": "My Essay (final) v2.pdf"}],
+        }
+    )
     assert "(./My%20Essay%20%28final%29%20v2.pdf)" in out
     assert "(./My Essay" not in out
 
 
 def test_course_folder_links_are_encoded():
-    out = archive_index({"name": "S"}, "h", [
-        {"name": "08 Corporate Finance I", "folder": "08 Corporate Finance I__X__835", "grade": ""}
-    ])
+    out = archive_index(
+        {"name": "S"},
+        "h",
+        [
+            {
+                "name": "08 Corporate Finance I",
+                "folder": "08 Corporate Finance I__X__835",
+                "grade": "",
+            }
+        ],
+    )
     assert "08%20Corporate%20Finance%20I__X__835/README.md" in out
 
 
 def test_no_triple_blank_lines_anywhere():
     """Sections are appended independently; the seams must still read cleanly."""
-    out = submission_md({
-        "assignment": {"name": "A", "description": "<p>d</p>"},
-        "body": "<p>b</p>",
-        "attachments": [{"display_name": "f.pdf"}],
-        "submission_comments": [{"author": {"display_name": "X"}, "comment": "c"}],
-    })
+    out = submission_md(
+        {
+            "assignment": {"name": "A", "description": "<p>d</p>"},
+            "body": "<p>b</p>",
+            "attachments": [{"display_name": "f.pdf"}],
+            "submission_comments": [{"author": {"display_name": "X"}, "comment": "c"}],
+        }
+    )
     assert "\n\n\n" not in out
     assert out.endswith("\n") and not out.endswith("\n\n")

@@ -30,8 +30,11 @@ class NullProgress:
     def finish_file(self, failed: bool = False) -> None: ...
     def start_retry(self, count: int) -> None: ...
     def note(self, message: str, seconds: float) -> None: ...
-    def __enter__(self): return self
-    def __exit__(self, *exc): return False
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
 
 class PlainProgress(NullProgress):

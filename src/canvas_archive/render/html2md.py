@@ -15,9 +15,26 @@ from html import unescape
 from html.parser import HTMLParser
 
 _BLOCK = {
-    "p", "div", "section", "article", "header", "footer",
-    "h1", "h2", "h3", "h4", "h5", "h6",
-    "ul", "ol", "li", "table", "tr", "blockquote", "pre", "hr",
+    "p",
+    "div",
+    "section",
+    "article",
+    "header",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "ul",
+    "ol",
+    "li",
+    "table",
+    "tr",
+    "blockquote",
+    "pre",
+    "hr",
 }
 _SKIP_CONTENT = {"script", "style", "head", "meta", "link"}
 

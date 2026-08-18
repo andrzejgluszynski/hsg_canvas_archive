@@ -22,7 +22,7 @@ def test_extra_params_before_rel():
     assert next_url('<https://x/p2>; type="application/json"; rel="next"') == "https://x/p2"
 
 
-@pytest.mark.parametrize("header", [None, "", "garbage", "<no-rel-here>", "; rel=\"next\""])
+@pytest.mark.parametrize("header", [None, "", "garbage", "<no-rel-here>", '; rel="next"'])
 def test_missing_or_malformed_yields_none(header):
     assert next_url(header) is None
 

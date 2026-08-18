@@ -14,7 +14,10 @@ _ILLEGAL = re.compile(r'[<>:"/\\|?*]')
 
 # Windows reserved device names, matched case-insensitively against the stem.
 _RESERVED = {
-    "CON", "PRN", "AUX", "NUL",
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
     *(f"COM{i}" for i in range(1, 10)),
     *(f"LPT{i}" for i in range(1, 10)),
 }

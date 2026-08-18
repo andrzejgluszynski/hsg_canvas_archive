@@ -95,7 +95,7 @@ def test_trailing_dots_and_spaces_removed(name):
 def test_configure_console_is_safe_to_call():
     from canvas_archive.paths import configure_console
 
-    configure_console()   # must never raise, whatever the stream type
+    configure_console()  # must never raise, whatever the stream type
 
 
 def test_configure_console_survives_a_stream_without_reconfigure(monkeypatch):

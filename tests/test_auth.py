@@ -17,20 +17,20 @@ TOKEN = "1234~EXAMPLEtokenNOTreal0000000000000000000000000000000000000000000000"
     "pasted",
     [
         TOKEN,
-        f"  {TOKEN}  \n",                 # trailing newline from a terminal paste
-        f"Bearer {TOKEN}",                # copied from an API doc example
+        f"  {TOKEN}  \n",  # trailing newline from a terminal paste
+        f"Bearer {TOKEN}",  # copied from an API doc example
         f"BEARER {TOKEN}",
         f"token={TOKEN}",
         f'"{TOKEN}"',
         f"'{TOKEN}'",
-        f"“{TOKEN}”",           # smart quotes from a rich-text editor
-        f'Bearer "{TOKEN}"',              # needs two peel passes
-        f"{TOKEN}.",                      # end of a sentence in an email
+        f"“{TOKEN}”",  # smart quotes from a rich-text editor
+        f'Bearer "{TOKEN}"',  # needs two peel passes
+        f"{TOKEN}.",  # end of a sentence in an email
         f"{TOKEN},",
-        f"﻿{TOKEN}",                 # BOM
+        f"﻿{TOKEN}",  # BOM
         f"{TOKEN[:20]}​{TOKEN[20:]}",  # zero-width space from a web page copy
-        f" {TOKEN} ",           # non-breaking spaces
-        f"{TOKEN[:30]}\n{TOKEN[30:]}",    # wrapped across lines in the source
+        f" {TOKEN} ",  # non-breaking spaces
+        f"{TOKEN[:30]}\n{TOKEN[30:]}",  # wrapped across lines in the source
     ],
 )
 def test_paste_damage_is_undone(pasted):

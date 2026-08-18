@@ -139,8 +139,10 @@ def markdown_to_html(text: str) -> str:
             continue
 
         # Tables: a header row followed by a |---| separator.
-        if stripped.startswith("|") and index + 1 < len(lines) and re.match(
-            r"^\|[\s:|-]+\|$", lines[index + 1].strip()
+        if (
+            stripped.startswith("|")
+            and index + 1 < len(lines)
+            and re.match(r"^\|[\s:|-]+\|$", lines[index + 1].strip())
         ):
             close_lists()
             header = [c.strip() for c in stripped.strip("|").split("|")]
@@ -190,8 +192,10 @@ def markdown_to_html(text: str) -> str:
         close_lists()
         para = [stripped]
         index += 1
-        while index < len(lines) and lines[index].strip() and not re.match(
-            r"^(#{1,6}\s|\||>|```|\s*([-*]|\d+\.)\s)", lines[index].strip()
+        while (
+            index < len(lines)
+            and lines[index].strip()
+            and not re.match(r"^(#{1,6}\s|\||>|```|\s*([-*]|\d+\.)\s)", lines[index].strip())
         ):
             para.append(lines[index].strip())
             index += 1

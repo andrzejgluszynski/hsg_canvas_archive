@@ -7,7 +7,7 @@ from canvas_archive.sanitize import DEFAULT_MAX_BYTES, safe_component, unique_co
     "raw,expected",
     [
         ("CON", "_CON"),
-        ("con.txt", "_con.txt"),          # reserved with an extension, case-insensitive
+        ("con.txt", "_con.txt"),  # reserved with an extension, case-insensitive
         ("LPT9", "_LPT9"),
         ("nul.tar.gz", "_nul.tar.gz"),
         ("  padded  ", "padded"),
