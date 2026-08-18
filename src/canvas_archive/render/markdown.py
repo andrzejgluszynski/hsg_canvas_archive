@@ -382,7 +382,11 @@ def pages_md(course_name: str, pages: list[dict]) -> str:
 
 
 def archive_index(user: dict, host: str, courses: list[dict[str, Any]]) -> str:
-    """The front door: every course, its grade, and a link into its folder."""
+    """The front door: every course, its grade, and a way in.
+
+    The course name is itself the link. An extra column holding the word "open" only
+    costs width that the names need.
+    """
     lines = [
         "# Canvas Archive",
         "",
@@ -390,14 +394,14 @@ def archive_index(user: dict, host: str, courses: list[dict[str, Any]]) -> str:
         "",
         f"{len(courses)} courses archived.",
         "",
-        "| Course | Grade | Folder |",
-        "|---|---|---|",
+        "| Course | Grade |",
+        "|---|---|",
     ]
     for entry in sorted(courses, key=lambda c: c["name"].lower()):
         grade = entry.get("grade") or "—"
         folder = quote(entry["folder"])
         name = entry["name"].strip().replace("|", "\\|")
-        lines.append(f"| {name} | {grade} | [open](./courses/{folder}/README.md) |")
+        lines.append(f"| [{name}](./courses/{folder}/README.md) | {grade} |")
     lines += [
         "",
         "---",

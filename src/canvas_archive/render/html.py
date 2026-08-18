@@ -49,7 +49,11 @@ body{
   font-feature-settings:"cv05" 1,"ss01" 1;
   -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
 }
-.wrap{max-width:44rem;margin:0 auto;padding:3rem 1.5rem 6rem}
+/* The page is wide so tables and card grids can use the screen, but running text
+   is held to a readable measure. A 44rem column on a 27" display wastes most of the
+   screen on a course index while wrapping the names that need the room. */
+.wrap{max-width:64rem;margin:0 auto;padding:3rem 1.75rem 6rem}
+h1,h2,h3,h4,h5,h6,p,ul,ol,blockquote,footer{max-width:46rem}
 
 /* --- masthead ---------------------------------------------------------- */
 nav.crumbs{
@@ -79,7 +83,7 @@ h4,h5,h6{
   color:var(--muted);margin:1.75rem 0 .5rem;
 }
 p{margin:0 0 1rem}
-p,li{overflow-wrap:anywhere}
+p,li,td,th{overflow-wrap:break-word}
 ul,ol{padding-left:1.3rem;margin:0 0 1rem}
 li{margin:.3rem 0}
 li::marker{color:var(--muted)}
@@ -113,6 +117,9 @@ p.sub{color:var(--muted);font-size:.875rem;margin:-.35rem 0 1.9rem;font-weight:4
   border-radius:var(--radius);background:var(--surface);
 }
 table{border-collapse:collapse;width:100%;font-size:.9125rem}
+table th:first-child,table td:first-child{width:auto}
+/* Short trailing values (a grade, a size, a date) should never wrap. */
+table td+td:last-child:not(:first-child){white-space:nowrap;width:1%}
 th,td{text-align:left;padding:.65rem .9rem;border-bottom:1px solid var(--rule)}
 th{
   font-weight:560;color:var(--muted);font-size:.6875rem;text-transform:uppercase;
@@ -156,6 +163,20 @@ table.files tr:hover td.k,table.files tr:hover a{color:var(--accent)}
 .ico{width:1.15em;height:1.15em;vertical-align:-.2em;flex:none;stroke-width:1.6}
 .ico-sm{width:.95em;height:.95em}
 
+.grade{display:inline-flex;align-items:center;gap:.55rem;white-space:nowrap}
+.g-val{font-weight:580;font-variant-numeric:tabular-nums;min-width:2.4ch;text-align:right}
+.g-track{
+  position:relative;width:5.5rem;height:5px;border-radius:3px;
+  background:var(--rule);overflow:hidden;flex:none;
+}
+.g-fill{position:absolute;inset:0 auto 0 0;background:var(--accent);border-radius:3px}
+.g-pct{color:var(--muted);font-size:.8125rem;font-variant-numeric:tabular-nums;
+       min-width:4.5ch;text-align:right}
+@media (max-width:34rem){.g-track{display:none}}
+object.pdf{
+  display:block;width:100%;height:min(78vh,60rem);margin:1.25rem 0;
+  border:1px solid var(--rule);border-radius:var(--radius);background:var(--surface);
+}
 footer{
   margin-top:5rem;padding-top:1.5rem;border-top:1px solid var(--rule);
   font-size:.8125rem;color:var(--muted);display:flex;align-items:center;gap:.4rem;
@@ -164,7 +185,8 @@ footer a{color:var(--muted);font-weight:450}
 footer a:hover{color:var(--accent)}
 
 @media (max-width:34rem){
-  .wrap{padding:2rem 1.15rem 4rem}
+  .wrap{padding:2rem 1.15rem 4rem;max-width:100%}
+  table td+td:last-child:not(:first-child){white-space:normal}
   h1{font-size:1.625rem}
   h2{font-size:1.0625rem;margin-top:2.25rem}
   .cards{grid-template-columns:1fr}
@@ -457,6 +479,15 @@ _SECTION_ICON = {
 }
 
 
+# The raw API payloads and the Markdown sources are the archival record, not things
+# anyone wants to browse. They stay on disk; they just do not clutter the file lists.
+_PLUMBING_SUFFIXES = {".json", ".md"}
+
+
+def _is_plumbing(entry: Path) -> bool:
+    return entry.is_file() and entry.suffix.lower() in _PLUMBING_SUFFIXES
+
+
 def _size(num: float) -> str:
     for unit in ("B", "KB", "MB", "GB"):
         if abs(num) < 1024:
@@ -471,6 +502,27 @@ def _kind(path: Path) -> str:
     return _EXT_ICON.get(path.suffix.lower(), "doc")
 
 
+def pdf_viewer(pdf: Path, *, depth: int, crumbs: str) -> str:
+    """A page that shows a PDF inline, with the archive's navigation still around it.
+
+    Clicking a document should not eject you from the archive. `<object>` uses the
+    browser's own PDF viewer and falls back to its child content when there isn't one,
+    so this degrades to a plain link rather than an empty frame.
+    """
+    name = html_mod.escape(pdf.name)
+    target = quote(pdf.name)
+    body = (
+        f"<h1>{name}</h1>"
+        f'<p class="sub">{_size(pdf.stat().st_size)}'
+        f' · <a href="./{target}" target="_blank" rel="noopener">open directly</a></p>'
+        f'<object class="pdf" data="./{target}" type="application/pdf">'
+        f"<p>Your browser can't show this PDF inline. "
+        f'<a href="./{target}" target="_blank" rel="noopener">Open {name}</a> instead.</p>'
+        f"</object>"
+    )
+    return page(pdf.name, body, crumbs=crumbs, depth=depth)
+
+
 def file_listing(directory: Path, *, title: str, depth: int, crumbs: str = "") -> str:
     """A browsable listing for a folder of real files.
 
@@ -479,7 +531,7 @@ def file_listing(directory: Path, *, title: str, depth: int, crumbs: str = "") -
     the index instead of relying on the browser to.
     """
     entries = sorted(
-        (e for e in directory.iterdir() if not e.name.startswith(".")),
+        (e for e in directory.iterdir() if not e.name.startswith(".") and not _is_plumbing(e)),
         key=lambda e: (not e.is_dir(), e.name.lower()),
     )
     rows = []
@@ -490,10 +542,15 @@ def file_listing(directory: Path, *, title: str, depth: int, crumbs: str = "") -
         if entry.is_dir():
             target = f"{quote(entry.name)}/index.html"
             size = ""
-            count = sum(1 for _ in entry.rglob("*") if _.is_file())
+            count = sum(1 for f in entry.rglob("*") if f.is_file() and not _is_plumbing(f))
             note = f"{count} item{'s' if count != 1 else ''}"
         else:
-            target = quote(entry.name)
+            # PDFs open in the in-page viewer; everything else opens directly.
+            target = (
+                f"{quote(entry.stem)}.view.html"
+                if entry.suffix.lower() == ".pdf"
+                else quote(entry.name)
+            )
             total += entry.stat().st_size
             size = _size(entry.stat().st_size)
             note = ""
@@ -517,6 +574,53 @@ def file_listing(directory: Path, *, title: str, depth: int, crumbs: str = "") -
             + "</tbody></table></div>"
         )
     return page(title, body, crumbs=crumbs, depth=depth)
+
+
+# Grades arrive as "5.25 / 78.45%" (a Swiss 1-6 mark plus a percentage), or as a bare
+# percentage, or as an em dash when the course was never graded. The Markdown keeps the
+# plain text; only the rendered index draws the scale.
+_GRADE_BOTH = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)%\s*$")
+_GRADE_PCT = re.compile(r"^\s*(\d+(?:\.\d+)?)%\s*$")
+
+SWISS_MIN, SWISS_MAX = 1.0, 6.0
+
+
+def grade_cell(text: str) -> str:
+    """Render a grade as a value, a bar showing where it sits, and its percentage.
+
+    A number alone gives no sense of how good it is unless you already know the scale,
+    which nobody will in ten years.
+    """
+    both = _GRADE_BOTH.match(text)
+    pct_only = _GRADE_PCT.match(text)
+
+    if both:
+        mark, pct = float(both.group(1)), float(both.group(2))
+        fill = (mark - SWISS_MIN) / (SWISS_MAX - SWISS_MIN)
+        value, trailing = both.group(1), f"{both.group(2)}%"
+        hint = f"{value} on a {SWISS_MIN:.0f}-{SWISS_MAX:.0f} scale ({trailing})"
+    elif pct_only:
+        pct = float(pct_only.group(1))
+        fill = pct / 100
+        value, trailing = f"{pct_only.group(1)}%", ""
+        hint = value
+    else:
+        return html_mod.escape(text)
+
+    width = max(0.0, min(1.0, fill)) * 100
+    return (
+        f'<span class="grade" title="{html_mod.escape(hint)}">'
+        f'<span class="g-val">{html_mod.escape(value)}</span>'
+        f'<span class="g-track"><span class="g-fill" style="width:{width:.1f}%"></span></span>'
+        + (f'<span class="g-pct">{html_mod.escape(trailing)}</span>' if trailing else "")
+        + "</span>"
+    )
+
+
+def enhance_grades(html: str) -> str:
+    """Swap the second column of the index table for rendered grade cells."""
+    row = re.compile(r"(<tr><td>.*?</td><td>)(.*?)(</td></tr>)", re.S)
+    return row.sub(lambda m: m.group(1) + grade_cell(m.group(2)) + m.group(3), html)
 
 
 def page(title: str, body_html: str, *, crumbs: str = "", depth: int = 0) -> str:
@@ -577,26 +681,35 @@ def build_site(root: Path) -> int:
             title = course_label(rel.parts[-2]) if depth == 2 else rel.parts[-2]
         else:
             title = md_path.stem.replace("_", " ").title()
-        fs_path(target).write_text(
-            md_file_to_html(md_path, title=title, crumbs=crumbs, depth=depth),
-            encoding="utf-8",
-        )
+        rendered = md_file_to_html(md_path, title=title, crumbs=crumbs, depth=depth)
+        if depth == 0 and is_index:
+            rendered = enhance_grades(rendered)
+        fs_path(target).write_text(rendered, encoding="utf-8")
         count += 1
 
-    # Folders of real files get a generated index, because a browser will not draw
-    # one for a file:// URL.
+    # A folder whose contents came from Markdown already has a rendered page. Giving
+    # it a file listing as well would put the raw JSON in front of the reader instead
+    # of the page they actually want -- clicking "Grades" must land on grades.html.
+    rendered_dirs = {md.parent for md in root.rglob("*.md")}
+
+    # Drop stale pages from earlier builds: an index.html is only ever legitimate
+    # where a README.md produced it. Without this, a listing written by a previous
+    # version keeps shadowing the rendered page it was replaced by.
+    for folder in rendered_dirs:
+        stale = folder / "index.html"
+        if stale.exists() and not (folder / "README.md").exists():
+            stale.unlink()
+
     for course_dir in (root / "courses").glob("*"):
         if not course_dir.is_dir():
             continue
         for folder in course_dir.rglob("*"):
-            if not folder.is_dir():
+            if not folder.is_dir() or folder in rendered_dirs:
                 continue
-            if (folder / "index.html").exists():
-                continue  # already has a page generated from its README
             # A folder holding only sub-folders (submissions/) still needs an index,
             # otherwise the only way in is to already know the sub-folder names.
             has_content = any(
-                (f.is_file() and f.suffix != ".md") or (f.is_dir() and any(f.iterdir()))
+                (f.is_file() and not _is_plumbing(f)) or (f.is_dir() and any(f.iterdir()))
                 for f in folder.iterdir()
             )
             if not has_content:
@@ -613,13 +726,25 @@ def build_site(root: Path) -> int:
             fs_path(folder / "index.html").write_text(
                 file_listing(
                     folder,
-                    title=folder.name.replace("_", " ").title(),
+                    title=_pretty(folder.name),
                     depth=depth,
                     crumbs=crumbs,
                 ),
                 encoding="utf-8",
             )
             count += 1
+
+            # One viewer page per PDF, so documents open inside the archive.
+            for pdf in folder.glob("*.pdf"):
+                view_crumbs = (
+                    crumbs
+                    + '<span class="sep">&rsaquo;</span>'
+                    + f'<a href="./index.html">{html_mod.escape(_pretty(folder.name))}</a>'
+                )
+                fs_path(folder / f"{pdf.stem}.view.html").write_text(
+                    pdf_viewer(pdf, depth=depth, crumbs=view_crumbs), encoding="utf-8"
+                )
+                count += 1
 
     # A course index should also link to its section pages.
     for course_dir in (root / "courses").glob("*"):
@@ -642,7 +767,10 @@ def build_site(root: Path) -> int:
                     + "</div></a>"
                 )
                 continue
-            pages = sorted(section.glob("*.html"))
+            # Prefer the section's own page (pages/pages.html) over whichever
+            # individual page happens to sort first.
+            named = section / f"{section.name}.html"
+            pages = [named] if named.exists() else sorted(section.glob("*.html"))
             if pages:
                 cards.append(
                     f'<a class="card" href="./{quote(section.name)}/{quote(pages[0].name)}">'

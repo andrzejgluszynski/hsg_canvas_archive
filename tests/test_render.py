@@ -148,8 +148,8 @@ def test_archive_index_lists_courses_with_grades():
         [{"name": "Finance", "folder": "Finance__F__1", "grade": "4.75 / 68.5%"}],
     )
     assert "**Student**" in out
-    assert "| Finance | 4.75 / 68.5% |" in out
-    assert "Finance__F__1/README.md" in out
+    assert "https://canvas.test" in out
+    assert "| [Finance](./courses/Finance__F__1/README.md) | 4.75 / 68.5% |" in out
 
 
 def test_attachment_links_are_url_encoded():
@@ -191,3 +191,30 @@ def test_no_triple_blank_lines_anywhere():
     )
     assert "\n\n\n" not in out
     assert out.endswith("\n") and not out.endswith("\n\n")
+
+
+def test_archive_index_links_the_course_name_itself():
+    """A separate column holding the word 'open' costs width the names need."""
+    out = archive_index(
+        {"name": "S"},
+        "https://canvas.test",
+        [
+            {
+                "name": "02 Global Business Environment",
+                "folder": "02 GBE__X__725",
+                "grade": "5 / 70.48%",
+            }
+        ],
+    )
+    assert "| Course | Grade |" in out
+    assert "Folder" not in out
+    assert ">open<" not in out and "](./courses" in out
+    assert "[02 Global Business Environment](./courses/02%20GBE__X__725/README.md)" in out
+    assert "| 5 / 70.48% |" in out
+
+
+def test_archive_index_escapes_pipes_in_course_names():
+    out = archive_index(
+        {"name": "S"}, "h", [{"name": "Stats | Methods", "folder": "f__1", "grade": ""}]
+    )
+    assert r"Stats \| Methods" in out
